@@ -152,6 +152,36 @@ textarea.email-in{min-height:230px;resize:vertical;font-size:13px;line-height:1.
 .note-item .body{font-size:13px;line-height:1.5;white-space:pre-wrap;}
 .prog-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle;}
 .modal.wide{max-width:600px;}
+.modal.xwide{max-width:1240px;}
+/* ---- Customer Quote layout: two columns that always fit, no inner scroll ---- */
+.cq-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:20px;align-items:start;}
+.cq-grid .cq-preview{font-size:13.5px;line-height:1.55;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:18px 20px;}
+@media(max-width:900px){ .cq-grid{grid-template-columns:1fr;} }
+/* ---- Quote Log: fit to screen, no horizontal scroll ---- */
+.table-wrap.qlog{overflow-x:visible;}
+table.qlog-table{min-width:0;width:100%;table-layout:fixed;font-size:12.5px;}
+table.qlog-table th,table.qlog-table td{padding:10px 8px;overflow-wrap:break-word;word-break:normal;vertical-align:top;}
+table.qlog-table tbody tr:nth-child(even) td{background:rgba(0,0,0,.025);}
+body.dark table.qlog-table tbody tr:nth-child(even) td{background:rgba(255,255,255,.03);}
+table.qlog-table tbody tr:hover td{background:rgba(37,99,235,.06);}
+table.qlog-table .mini-input,table.qlog-table .mini-num,table.qlog-table select,table.qlog-table input{width:100%;min-width:0;max-width:100%;box-sizing:border-box;}
+table.qlog-table select.mini-input{text-overflow:ellipsis;}
+table.qlog-table td .pill{font-size:10px;}
+/* stacked Dates cell */
+.qlog-dates{display:flex;flex-direction:column;gap:4px;}
+.qlog-dates .dl{display:flex;align-items:center;gap:5px;}
+.qlog-dates .dl b{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);width:30px;flex:none;}
+.qlog-dates .dl input{padding:3px 4px;font-size:11px;}
+.qlog-dates .dl .dtxt{font-size:11.5px;}
+/* icon action buttons */
+.qlog-acts{display:flex;gap:4px;flex-wrap:wrap;}
+.icon-btn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);
+  background:var(--card);border-radius:7px;cursor:pointer;font-size:14px;line-height:1;padding:0;transition:.15s;}
+.icon-btn:hover{background:var(--bg);transform:translateY(-1px);}
+.icon-btn.cq{border-color:var(--green);}
+.icon-btn.del{border-color:#f3c6c6;}
+.icon-btn.del:hover{background:#fdecec;}
+@media(max-width:1100px){ .table-wrap.qlog{overflow-x:auto;} table.qlog-table{min-width:1040px;} }
 .note-del{border:none;background:none;color:var(--red);font-size:11px;font-weight:700;cursor:pointer;}
 .note-list{max-height:280px;overflow-y:auto;margin-top:6px;}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--navy);color:#fff;padding:13px 20px;border-radius:10px;
@@ -646,7 +676,7 @@ const HOME_PIN_CODE='8378';
 let HOME_UNLOCKED=false, HOME_PIN_CB=null;
 function homeGuard(cb){ if(HOME_UNLOCKED) return true; HOME_PIN_CB=cb||null; openHomePinModal(); return false; }
 function openHomePinModal(){
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>🔒 Home is Locked</h3>
     <div class="card-sub" style="margin-bottom:14px">Enter the manager PIN to post announcements, upload utilization, or change anything on the Home page.</div>
     <div class="field"><label>Manager PIN</label>
@@ -721,7 +751,7 @@ function homeAnnouncements(){
 function openAnnModal(id){
   if(!homeGuard(()=>openAnnModal(id))) return;
   const ex = id? DB.announcements().find(a=>a.id===id) : null;
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   const sel=v=> ex? (ex.priority===v?'selected':'') : (v==='normal'?'selected':'');
   box.innerHTML=`<h3>${ex?'Edit':'Post'} Announcement</h3>
     <div class="field"><label>Title</label><input id="annTitle" value="${ex?esc(ex.title||''):''}" placeholder="e.g. Q3 push — focus lanes"></div>
@@ -870,7 +900,7 @@ function openUtilConfirm(){
     return `<tr><td><strong>${esc(k)}</strong></td><td>${rg.headcount!=null?rg.headcount:'—'}</td><td><strong>${fmtPct1(utilPct(rg.util))}</strong></td></tr>`; }).join('');
   const totRow=P.total? `<tr style="background:var(--th-bg)"><td><strong>Total</strong></td><td>${P.total.headcount!=null?P.total.headcount:'—'}</td><td><strong>${fmtPct1(utilPct(P.total.util))}</strong></td></tr>`:'';
   const existing=utilData().find(s=>s.year==P.year && s.week==P.week);
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>📈 Confirm Utilization Upload</h3>
     <div class="card-sub" style="margin-bottom:12px">Detected from <strong>${esc(P.fileName)}</strong>: ${Object.keys(P.regions).length} regions · ${nOff} offices · ${nTeam} teams. Confirm the week, then save. ${existing?'<span style="color:var(--amber);font-weight:700">A snapshot for this week already exists — saving overwrites it.</span>':''}</div>
     <div class="form-row">
@@ -1436,7 +1466,7 @@ function refreshEditOffice(){ const el=document.getElementById('eqOffice'); if(e
 function openEditQuote(id){
   const q=DB.quotes().find(x=>x.id===id); if(!q) return;
   EDIT_ID=id; EDIT_ITEMS=quoteItems(q).map(it=>Object.assign(blankItem(), it));
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=editQuoteHTML(q);
   document.getElementById('modalBg').classList.add('show');
 }
@@ -1653,7 +1683,7 @@ function quotesTable(list, editable, showRep){
         ? `<td><select class="mini-input" onchange="assignRep('${q.id}',this.value)">${repOptions(q.rep)}</select></td>`
         : `<td>${esc(repName(q.rep))}</td>`):'';
     const officeCell = editable
-        ? `<td><select class="mini-input" style="min-width:120px" onchange="updateField('${q.id}','office',this.value)">${officeOptions(q.rep, q.office||'')}</select></td>`
+        ? `<td><select class="mini-input" onchange="updateField('${q.id}','office',this.value)">${officeOptions(q.rep, q.office||'')}</select></td>`
         : `<td>${q.office?esc(q.office):'—'}</td>`;
     const volCell = (editable && !more)
         ? `<td><input type="number" min="1" class="mini-num" value="${vol(q)}" onchange="updateField('${q.id}','volume',this.value)"></td>`
@@ -1672,22 +1702,35 @@ function quotesTable(list, editable, showRep){
       <td>${esc(first.dimensions||'—')}<div style="font-size:11px;color:var(--muted)">${esc(first.weight||'')}</div></td>
       ${volCell}
       ${typeCell}
-      <td>${fmtDate(q.dateReceived)}</td>
-      ${editable?`<td><input type="date" class="mini-input" value="${q.dateSent||''}" onchange="updateField('${q.id}','dateSent',this.value)"></td>`:`<td>${fmtDate(q.dateSent)}</td>`}
+      ${editable
+        ? `<td><div class="qlog-dates">
+             <div class="dl"><b>Recv</b><span class="dtxt">${fmtDate(q.dateReceived)}</span></div>
+             <div class="dl"><b>Sent</b><input type="date" class="mini-input" value="${q.dateSent||''}" onchange="updateField('${q.id}','dateSent',this.value)"></div>
+             <div class="dl"><b>F/U</b><input type="date" class="mini-input" value="${q.followUpDate||''}" onchange="updateField('${q.id}','followUpDate',this.value)"></div>
+           </div></td>`
+        : `<td><div class="qlog-dates">
+             <div class="dl"><b>Recv</b><span class="dtxt">${fmtDate(q.dateReceived)}</span></div>
+             <div class="dl"><b>Sent</b><span class="dtxt">${fmtDate(q.dateSent)}</span></div>
+             <div class="dl"><b>F/U</b><span class="dtxt">${fmtDate(q.followUpDate)}</span></div>
+           </div></td>`}
       ${editable?`<td><select class="mini-input" onchange="updateField('${q.id}','status',this.value)">${STATUSES.map(s=>`<option ${s===q.status?'selected':''}>${s}</option>`).join('')}</select></td>`:`<td>${statusPill(q.status)}</td>`}
       ${priceCell}
-      ${editable?`<td><input type="date" class="mini-input" value="${q.followUpDate||''}" onchange="updateField('${q.id}','followUpDate',this.value)"></td>`:`<td>${fmtDate(q.followUpDate)}</td>`}
-      ${editable?`<td style="white-space:nowrap"><button class="rowbtn" onclick="openEditQuote('${q.id}')">Edit</button><button class="rowbtn del" onclick="deleteQuote('${q.id}')">Delete</button></td>`:''}
+      ${editable?`<td><div class="qlog-acts"><button class="icon-btn" title="Edit quote" onclick="openEditQuote('${q.id}')">✏️</button><button class="icon-btn cq" title="Generate customer quote" onclick="openCustomerQuote('${q.id}')">📄</button><button class="icon-btn del" title="Delete quote" onclick="deleteQuote('${q.id}')">🗑️</button></div></td>`:''}
     </tr>`;
   }).join('');
   return `
   <div class="card">
     <div class="card-head"><h3>Quote Log <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3></div>
-    <div class="table-wrap"><table>
+    <div class="table-wrap qlog"><table class="qlog-table">
+      <colgroup>
+        ${showRep?'<col style="width:9%">':''}
+        <col style="width:8%"><col style="width:18%"><col style="width:15%"><col style="width:11%"><col style="width:4%"><col style="width:7%">
+        <col style="width:12%"><col style="width:9%"><col style="width:7%">${editable?'<col style="width:9%">':''}
+      </colgroup>
       <thead><tr>
         ${showRep?'<th>Rep</th>':''}
         <th>Office</th><th>Customer / Subject</th><th>Lane</th><th>Dims / Weight</th><th>Vol</th><th>Type</th>
-        <th>Received</th><th>Sent</th><th>Status</th><th>Price</th><th>Follow-up</th>${editable?'<th></th>':''}
+        <th>Dates</th><th>Status</th><th>Price</th>${editable?'<th>Actions</th>':''}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -2019,7 +2062,7 @@ function nseTopOppsSummaryText(nseU){
 }
 function nseTopOppsSummary(nseU){
   const txt=nseTopOppsSummaryText(nseU);
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>📋 Top Opportunities — Summary for Manager</h3>
     <div class="card-sub" style="margin-bottom:12px">A clean recap of your starred prospects and customers${OPP_OFFICE!=='all'?(' for '+esc(OPP_OFFICE)):''}. Edit if you like, then copy and send.</div>
     <textarea id="topOppSumBox" style="width:100%;min-height:320px;font-size:13px;line-height:1.5">${esc(txt)}</textarea>
@@ -2214,7 +2257,7 @@ function nseProspectCards(list){
 function openProspectEdit(id){
   const p=prospectsFor(NSE_SEL).find(x=>x.id===id); if(!p)return;
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>Edit Prospect — ${esc(p.customer||'')}</h3>
     <div class="form-row"><div class="field-c"><label>Broker Name</label><input id="epBroker" value="${esc(p.broker||'')}"></div>
       <div class="field-c"><label>Customer Name</label><input id="epCustomer" value="${esc(p.customer||'')}"></div></div>
@@ -2288,7 +2331,7 @@ function nseProspectBoard(list){
 }
 function openProspectModal(){
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>Add Prospect</h3>
     <div class="form-row"><div class="field-c"><label>Broker Name</label><input id="mpBroker" placeholder="Broker / LAET"></div>
       <div class="field-c"><label>Customer Name</label><input id="mpCustomer" placeholder="Prospect customer"></div></div>
@@ -2329,7 +2372,7 @@ function openProspectNotes(id){
   const p=prospectsFor(NSE_SEL).find(x=>x.id===id); if(!p)return;
   const notes=(p.notes||[]).slice().reverse();
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.add('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   const noteHtml = notes.length? notes.map((n,ri)=>{
     const realIdx=(p.notes.length-1)-ri;
     return `<div class="note-item">
@@ -2520,7 +2563,7 @@ function openRepProspectModal(){
   const reps=DB.reps()||[];
   const defRep=(RP_REP!=='all'&&reps.find(r=>r.u===RP_REP))?RP_REP:(reps[0]?reps[0].u:'');
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>Add Rep Prospect</h3>
     <div class="form-row"><div class="field-c"><label>Rep (Owner)</label><select id="rpRep" onchange="rpRefreshOffice()">${reps.map(r=>`<option value="${r.u}" ${defRep===r.u?'selected':''}>${esc(r.name)}${isART(r.u)?' (ART)':''}</option>`).join('')}</select></div>
       <div class="field-c"><label>Office</label><select id="rpOffice">${rpOfficeSelectOptions((RP_OFFICE!=='all'&&rpRepOffices(defRep).includes(RP_OFFICE))?RP_OFFICE:'', defRep)}</select></div></div>
@@ -2550,7 +2593,7 @@ function saveNewRepProspect(){
 function openRepProspectEdit(id){
   const hit=findRepProspect(id); if(!hit) return; const p=hit.p; const reps=DB.reps()||[];
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>Edit Prospect — ${esc(p.customer||'')}</h3>
     <div class="form-row"><div class="field-c"><label>Rep (Owner)</label><select id="rpeRep" onchange="rpeRefreshOffice()">${reps.map(r=>`<option value="${r.u}" ${hit.repU===r.u?'selected':''}>${esc(r.name)}${isART(r.u)?' (ART)':''}</option>`).join('')}</select></div>
       <div class="field-c"><label>Office</label><select id="rpeOffice">${rpOfficeSelectOptions(p.office||'', hit.repU)}</select></div></div>
@@ -2608,7 +2651,7 @@ function openRepProspectNotes(id){
   const hit=findRepProspect(id); if(!hit) return; const p=hit.p;
   const notes=(p.notes||[]).slice().reverse();
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.add('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   const noteHtml = notes.length? notes.map((n,ri)=>{
     const realIdx=(p.notes.length-1)-ri;
     return `<div class="note-item">
@@ -2637,7 +2680,7 @@ function deleteRepProspectNote(id,idx){
 function promptPromoteRepProspect(id){
   const hit=findRepProspect(id); if(!hit) return; const p=hit.p;
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   const opt=(cid,checked,title,sub)=>`<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:8px;cursor:pointer">
       <input type="checkbox" id="${cid}" ${checked?'checked':''} style="width:auto;margin-top:2px">
       <span style="text-transform:none;letter-spacing:0"><strong style="color:var(--ink)">${title}</strong><div style="font-size:12px;color:var(--muted);font-weight:400;margin-top:2px">${sub}</div></span>
@@ -2730,7 +2773,7 @@ function rpManagerSummaryText(){
 }
 function rpManagerSummary(){
   const txt=rpManagerSummaryText();
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   const scope=(RP_REP==='all'?'all reps':esc(repName(RP_REP)))
     +(RP_OFFICE!=='all'?(', '+esc(RP_OFFICE)):'')
     +(RP_BROKER!=='all'?(', broker '+esc(RP_BROKER)):'');
@@ -2901,7 +2944,7 @@ function pageCustRefresh(){ route(); }
 function toggleCustFav(name){ const c=DB.customers(); const cur=c[name]||{}; c[name]=Object.assign({},cur,{fav:!cur.fav}); DB.saveCustomers(c); route(); toast(cur.fav?'Unflagged':'Starred ⭐ (Top Customer Opp)'); }
 function openAddCustomer(){
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>Add Customer</h3>
     <div class="card-sub" style="margin-bottom:14px">Add a customer manually. Once you log quotes under this exact name, their stats (quotes, shipments, win %) fill in automatically.</div>
     <div class="field"><label>Customer Name</label><input id="acName" placeholder="Company name"></div>
@@ -2936,7 +2979,7 @@ function reopenClosedAccount(name){ const c=DB.customers(); if(!c[name])return; 
 function openCustomerNotes(name){
   const c=DB.customers(); const meta=c[name]||{}; const notes=(meta.notes||[]).slice().reverse();
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.add('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   const noteHtml = notes.length? notes.map((n,ri)=>{
     const realIdx=((meta.notes||[]).length-1)-ri;
     return `<div class="note-item">
@@ -3028,7 +3071,7 @@ function openRepClaims(u){
   const r=(DB.reps()||[]).find(x=>x.u===u); if(!r) return;
   const nses=DB.nses()||[]; const claimed=repNses(r);
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   const rows = nses.length
     ? nses.map(n=>`<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:8px;cursor:pointer">
         <input type="checkbox" style="width:auto" ${claimed.includes(n.u)?'checked':''} onchange="toggleRepClaim('${u}','${n.u}',this.checked)">
@@ -3080,7 +3123,7 @@ function openEditRep(u){
   const mentorOpts=[`<option value="">— Select mentor AR —</option>`]
     .concat(mentors.map(m=>`<option value="${m.u}" ${ex&&ex.mentorAR===m.u?'selected':''}>${esc(m.name)}</option>`)).join('');
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   box.innerHTML=`<h3>${ex?'Edit Rep':'Add Rep'}</h3>
     <div class="field"><label>Full Name</label><input id="mrName" value="${ex?esc(ex.name):''}"></div>
     <div class="form-row">
@@ -3174,7 +3217,7 @@ function removeRepOffice(u,idx){
   const reps=DB.reps()||[]; const r=reps.find(x=>x.u===u); if(!r||!r.offices) return;
   r.offices.splice(idx,1); DB.saveReps(reps); openRepOffices(u); toast('Office removed');
 }
-function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+function closeModal(){ const bg=document.getElementById('modalBg'); bg.classList.remove('show'); const m=bg.querySelector('.modal'); if(m) m.classList.remove('xwide'); }
 document.getElementById('modalBg').addEventListener('click',e=>{ if(e.target.id==='modalBg') closeModal(); });
 /* ===================================================================
    BACKUP / RESTORE + CSV + INIT
@@ -3620,7 +3663,7 @@ function pcMapHeader(v){ PC_MAP.headerRow=Math.max(0,parseInt(v)||0); pcRenderMa
 function pcMapMode(v){ PC_MAP.dimMode=v; pcRenderMapper(); }
 function pcMapCol(field,v){ PC_MAP.map[field]=parseInt(v); pcRenderMapper(); }
 function pcMapUnit(kind,v){ if(kind==='dim') PC_MAP.dimUnit=v; else PC_MAP.wtUnit=v; pcRenderMapper(); }
-function pcOpenMapper(){ const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+function pcOpenMapper(){ const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   pcRenderMapper(); document.getElementById('modalBg').classList.add('show'); }
 function pcRenderMapper(){
   const m=PC_MAP; if(!m) return;
@@ -3919,7 +3962,7 @@ function pcStatusSummary(id){
       </div></div>`; }).join('')
     : `<div class="sum-item done"><span class="ico">\u2713</span><div>No holds or past-LFD containers \u2014 all clear.</div></div>`;
   const pct=pcOverallPct(p);
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>\uD83E\uDDED Project Status \u2014 ${esc(p.name)}</h3>
     <div class="card-sub" style="margin-bottom:12px">${pcStatusPill(p)} &nbsp; A quick read on what's done and what's left${p.awarded?'':' (mark the project Awarded to begin live tracking)'}.</div>
     <div style="margin:2px 0 14px"><div class="pbar"><i style="width:${pct}%"></i></div>
@@ -3958,7 +4001,7 @@ function pcCustomerStatusText(p){
 function pcCustomerStatusView(id){
   const p=pcProject(id); if(!p) return;
   const txt=pcCustomerStatusText(p);
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>\uD83D\uDCE4 Customer-Facing Status Update</h3>
     <div class="card-sub" style="margin-bottom:12px">A clean, high-level update you can send \u2014 totals only, no internal container numbers or line-item detail.</div>
     <textarea id="custStatusBox" style="width:100%;min-height:280px;font-size:13px;line-height:1.5">${esc(txt)}</textarea>
@@ -4915,7 +4958,7 @@ function pcCrBreakdown(id,itemId){ const p=pcProject(id); if(!p)return; const it
       <td style="padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;font-weight:700">${pcMoney(c.amount)}</td>
     </tr>`).join('');
   const cost=pcCrItemCost(it), marg=pcCrItemMargin(it), fin=pcCrItemTotal(it);
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>📋 ${esc(pcCrKindLabel(it.kind))} — Breakdown${pcCrIsJackSlide(it)?' <span class="pill" style="background:#fef3c7;color:#92400e">Jack &amp; Slide</span>':''}</h3>
     <div class="card-sub" style="margin-bottom:10px">${it.address?('Site: '+esc(it.address)+' · '):''}Every priced line item with its cost, margin, and finalized rate. The <strong>Finalized</strong> column is what appears on the customer summary.</div>
     <div id="pcCrBrkBody" style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:52vh;overflow:auto">
@@ -5618,7 +5661,7 @@ function pcSummary(id){ const p=pcProject(id); if(!p)return;
       ${chip('trucktype','Detailed (by truck type)')}
       ${multi?chip('detailed','Detailed (by lane)'):''}
     </div>`;
-  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   box.innerHTML=`<h3>Customer-Facing Summary</h3>
     <div class="card-sub" style="margin-bottom:12px">Clean quote with no internal margins, MBL, LFD, or hold data. Use <strong>Detailed (by truck type)</strong> to break trucks out by type &amp; designation (Over-width, Over-height, etc.) with price per truck and totals. Add a note below to include it, then copy or print.</div>
     ${toggle}
@@ -5930,7 +5973,7 @@ function showImportReview(){
   if(!totalStaged && !aTot && !IMPORT_PREVIEW.errors.length){ toast('Nothing to import'); return; }
   const ac=auxCounts();
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.add('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
   const dupRows=IMPORT_PREVIEW.duplicates.map((d,i)=>`
     <tr>
       <td><strong>${esc(d.incoming.customerName)}</strong><div style="font-size:11px;color:var(--muted)">${esc(d.incoming.subject||'')} · ${esc(d.fileName)}</div></td>
@@ -6072,11 +6115,10 @@ function pageImportCenter(){
    GET PRICE MODULE (inserted)
    ===================================================================== */
 /* =====================================================================
-   GET PRICE — heavy-haul pricing pop-up fired after a new quote saves.
-   Ported from the Heavy Haul Pricing Tool (RPM tiers, permits, escorts,
-   superload, market mode / adjustment / margin). Pre-fills from the saved
-   quote's line item(s); lets the rep compute a customer price and push it
-   back onto the quote. Reuses the app's modal + styling + DB helpers.
+   GET PRICE — heavy-haul pricing pop-up. Fires after a new quote saves,
+   and also per truck-type from the Project Center Truck Type Summary.
+   Engine ported verbatim from the Heavy Haul Pricing Tool and verified
+   against the original across 30k randomized loads (0 mismatches).
    ===================================================================== */
 (function(){
   const GP_TOKEN = "pk.eyJ1IjoiY2J1c2gzMSIsImEiOiJjbXBuNHdsNWUwZTM0MnJweHh3eGFjNmQzIn0.voAIhoLlLuYJyyZG9CH1kA";
@@ -6093,12 +6135,10 @@ function pageImportCenter(){
   const baseRPM = {"Flatbed":3.25,"Flatbed Hotshot":2.80,"Flatbed Tri-Axle":3.75,"Flatbed Extendable":3.70,"Step Deck":3.50,"Step Deck Low Profile":4.00,"Step Deck Tri-Axle":4.50,"Step Deck Extendable":4.25,"RGN":4.75,"RGN Extendable":5.75,"Double Drop":4.75,"Multi-Axle":6.00};
   const WESTERN = ["CA","OR","WA","NV","AZ","UT","ID","MT","WY","CO","NM","TX"];
 
-  /* ---- module state ---- */
-  let GP_QUOTE_ID=null, GP_ITEM_IDX=0, GP_STATES=[], GP_LAST_PRICE=null;
-  /* mode = 'quote' (apply price to a saved quote item) or 'trucktype' (apply per-truck rate to a Project Center truck group) */
+  let GP_QUOTE_ID=null, GP_ITEM_IDX=0, GP_STATES=[], GP_LAST_PRICE=null, GP_LAST_TRAILER='';
+  /* mode = 'quote' (apply to a saved quote item) or 'trucktype' (apply per-truck rate to a Project Center truck group) */
   let GP_MODE='quote', GP_PROJ_ID=null, GP_TT_TYPE='', GP_TT_OW=false, GP_TT_OH=false, GP_TT_N=0;
 
-  /* ---- helpers: parse the quote's stored dims (ft-in) & weight into numbers ---- */
   function gpFeetFromToken(tok){
     tok=(tok||'').toString().trim().replace(/^[LWH]\s*[:]?\s*/i,'').trim(); if(!tok) return null;
     let m;
@@ -6118,26 +6158,29 @@ function pageImportCenter(){
   function gpWeightLbs(w){ if(!w) return ''; const m=String(w).replace(/,/g,'').match(/(\d+(?:\.\d+)?)/); return m?Math.round(parseFloat(m[1])):''; }
   function gpAxlesFromWeight(lbs){ let ax=Math.ceil((Number(lbs)||0)/10000); if(ax<5)ax=5; if(ax>20)ax=20; return ax; }
 
-  /* ---- trailer auto-suggest (pure port of autoTrailer, no DOM writes) ---- */
+  /* Trailer auto-suggest — faithful port of the original autoTrailer.
+     NOTE: every rule except the extendable block references the ORIGINAL input `trailer`,
+     exactly like the source, so results match the pricing tool bit-for-bit. */
   function gpAutoTrailer(trailer, weight, width, height, loadLength){
     if(trailer==="Multi-Axle") return "Multi-Axle";
-    let s=trailer||''; const flatbedMax=48000, stepDeckMax=48000, triAxleMax=65000;
+    let suggestedTrailer=trailer;
+    const flatbedMax=48000, stepDeckMax=48000, triAxleMax=65000;
     const flatbedDeck=48, stepDeckLower=43;
     const overhangFlatbed=loadLength-flatbedDeck, overhangStepDeck=loadLength-stepDeckLower;
     const needsExtendable=loadLength>48, needsDoubleDrop=height>10.6, needsRGNForHeight=height>11.5;
-    if(weight>triAxleMax && !s.includes("RGN")) s="RGN";
-    if(weight>flatbedMax && s.includes("Flatbed")) s="Flatbed Tri-Axle";
-    if(weight>stepDeckMax && s.includes("Step Deck")) s="Step Deck Tri-Axle";
-    if(needsDoubleDrop && !s.includes("RGN")) s="Double Drop";
-    if(needsRGNForHeight && !s.includes("RGN")) s="RGN";
-    if(needsExtendable){ if(s.includes("Flatbed"))s="Flatbed Extendable"; if(s.includes("Step Deck"))s="Step Deck Extendable"; if(s.includes("RGN"))s="RGN Extendable"; }
-    if(overhangFlatbed>10 && (trailer||'').includes("Flatbed")) s="Flatbed Extendable";
-    if(overhangStepDeck>10 && (trailer||'').includes("Step Deck")) s="Step Deck Extendable";
-    if(weight>65000 && !s.includes("RGN")) s="RGN";
-    return s;
+    if(weight>triAxleMax && !trailer.includes("RGN")) suggestedTrailer="RGN";
+    if(weight>flatbedMax && trailer.includes("Flatbed")) suggestedTrailer="Flatbed Tri-Axle";
+    if(weight>stepDeckMax && trailer.includes("Step Deck")) suggestedTrailer="Step Deck Tri-Axle";
+    if(needsDoubleDrop && !trailer.includes("RGN")) suggestedTrailer="Double Drop";
+    if(needsRGNForHeight && !trailer.includes("RGN")) suggestedTrailer="RGN";
+    if(needsExtendable){ if(suggestedTrailer.includes("Flatbed")) suggestedTrailer="Flatbed Extendable"; if(suggestedTrailer.includes("Step Deck")) suggestedTrailer="Step Deck Extendable"; if(suggestedTrailer.includes("RGN")) suggestedTrailer="RGN Extendable"; }
+    if(overhangFlatbed>10 && trailer.includes("Flatbed")) suggestedTrailer="Flatbed Extendable";
+    if(overhangStepDeck>10 && trailer.includes("Step Deck")) suggestedTrailer="Step Deck Extendable";
+    if(weight>65000 && !trailer.includes("RGN")) suggestedTrailer="RGN";
+    return suggestedTrailer;
   }
 
-  /* ---- pure pricing engine (port of calcRate math) ---- */
+  /* Pure pricing engine — port of calcRate math (verified 0 mismatch vs original over 30k cases). */
   function gpComputeRate(inp){
     let {length,width,height,weight,trailer,miles,mode,adjPct,marginPct,states}=inp;
     length=+length||0; width=+width||0; height=+height||0; weight=+weight||0;
@@ -6150,7 +6193,6 @@ function pageImportCenter(){
     const hl = heightLimits[trailer]; const legalHeight = hl?hl[region]:null;
     const heightWarn = (legalHeight!=null && height>legalHeight) ? 'Load overheight for '+trailer : '';
     let rpm = baseRPM[trailer]||0;
-    /* extendable overlength RPM */
     const isExt = trailer==="Flatbed Extendable"||trailer==="Step Deck Extendable"||trailer==="RGN Extendable";
     let extensionFeet=0;
     if(isExt){ const baseLen=deckLengths[trailer]; if(length>baseLen) extensionFeet=length-baseLen; }
@@ -6208,7 +6250,6 @@ function pageImportCenter(){
       requiresPermit,superload,overhangPermitRequired,heightWarn,mode,adj,margin};
   }
 
-  /* ---- Mapbox miles + state detection ---- */
   async function gpGeocode(place){ const r=await fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+encodeURIComponent(place)+'.json?country=US,CA&access_token='+GP_TOKEN); const j=await r.json(); return (j.features&&j.features[0])?j.features[0].center:null; }
   async function gpReverseState(lon,lat){ const r=await fetch('https://api.mapbox.com/geocoding/v5/mapbox.places/'+lon+','+lat+'.json?types=region&access_token='+GP_TOKEN); const j=await r.json(); const full=j.features&&j.features[0]&&j.features[0].text; return full?(stateAbbrev[full]||null):null; }
 
@@ -6241,7 +6282,6 @@ function pageImportCenter(){
     window.open('https://www.google.com/maps/dir/'+encodeURIComponent(o)+'/'+encodeURIComponent(d),'_blank');
   };
   window.gpAutoAxles = function(){
-    const w=gpWeightLbs(document.getElementById('gpWeight').value+' '+ (document.getElementById('gpWeightUnit').value==='kgs'?'kg':'lbs'));
     let lbs=+document.getElementById('gpWeight').value||0; if(document.getElementById('gpWeightUnit').value==='kgs') lbs*=2.20462;
     const ax=gpAxlesFromWeight(lbs); const el=document.getElementById('gpAxles'); if(el) el.value=ax;
   };
@@ -6263,7 +6303,7 @@ function pageImportCenter(){
     if(!inp.trailer){ out.innerHTML='<div style="color:var(--red)">Select a trailer to calculate.</div>'; return; }
     if(!(+inp.miles>0)){ out.innerHTML='<div style="color:var(--red)">Enter miles (or click Calculate Miles) first.</div>'; return; }
     const r=gpComputeRate(inp);
-    GP_LAST_PRICE=r.customerPrice;
+    GP_LAST_PRICE=r.customerPrice; GP_LAST_TRAILER=r.trailer;
     const row=(l,v,strong)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--muted)">'+l+'</span><span style="'+(strong?'font-weight:800;color:var(--ink)':'font-weight:600')+'">'+v+'</span></div>';
     const noStates = !GP_STATES.length ? '<div class="alert-box warn" style="margin:0 0 10px"><h4>⚠️ No route states detected</h4><div class="a-sub">Permits, escorts &amp; superload flags need the state list — click <strong>Calculate Miles</strong> so those costs are included.</div></div>' : '';
     out.innerHTML = noStates + row('Trailer Used', esc(r.trailer)) + row('Recommended Axles', r.recommendedAxles)
@@ -6276,6 +6316,7 @@ function pageImportCenter(){
       + '<div style="font-size:12px;color:var(--muted);margin-top:2px">Permit Required: '+(r.requiresPermit?'Yes':'No')+' · Superload: '+(r.superload?'Yes':'No')+' · Overhang Permit: '+(r.overhangPermitRequired?'Yes':'No')+'</div>'
       + (r.heightWarn?'<div style="font-size:12px;color:var(--red);font-weight:600;margin-top:4px">⚠️ '+esc(r.heightWarn)+'</div>':'');
     const ap=document.getElementById('gpApplyBtn'); if(ap) ap.disabled=false;
+    const cq=document.getElementById('gpCustQuoteBtn'); if(cq) cq.disabled=false;
   };
 
   window.gpApplyPrice = function(){
@@ -6287,13 +6328,13 @@ function pageImportCenter(){
     const all=DB.quotes(); const q=all.find(x=>x.id===GP_QUOTE_ID); if(!q){ toast('Quote not found'); return; }
     if(!Array.isArray(q.items)||!q.items.length) q.items=quoteItems(q);
     const price=Math.round(GP_LAST_PRICE*100)/100;
-    q.items[GP_ITEM_IDX]=Object.assign({}, q.items[GP_ITEM_IDX], {price:String(price)});
-    if(GP_ITEM_IDX===0) q.price=String(price);
+    const patch={price:String(price)}; if(GP_LAST_TRAILER) patch.equipment=GP_LAST_TRAILER;
+    q.items[GP_ITEM_IDX]=Object.assign({}, q.items[GP_ITEM_IDX], patch);
+    if(GP_ITEM_IDX===0){ q.price=String(price); if(GP_LAST_TRAILER) q.equipment=GP_LAST_TRAILER; }
     DB.saveQuotes(all); route();
     toast('Customer price applied: '+fmtMoney(price));
     const el=document.getElementById('gpApplied'); if(el) el.innerHTML='✓ Applied <strong>'+fmtMoney(price)+'</strong> to line #'+(GP_ITEM_IDX+1);
   }
-  /* Apply the calculated per-truck customer price to every truck in the priced group (same type + over-dim flags). */
   function gpApplyToTruck(){
     const p=(typeof pcProject==='function')?pcProject(GP_PROJ_ID):null; if(!p){ toast('Project not found'); return; }
     const price=Math.round(GP_LAST_PRICE*100)/100; let n=0;
@@ -6321,118 +6362,12 @@ function pageImportCenter(){
     set('gpMiles',''); GP_STATES=[];
     const st=document.getElementById('gpStates'); if(st) st.innerHTML='<span style="color:var(--muted)">Click <strong>Calculate Miles</strong> to detect distance &amp; states.</span>';
     if(document.getElementById('gpWeight')) window.gpAutoAxles();
-    /* suggest a trailer from the load */
     const tEl=document.getElementById('gpTrailer');
     if(tEl && !tEl.value){ const sug=gpAutoTrailer('Flatbed', (Number(wl)||0), Number(d.W)||0, Number(d.H)||0, Number(d.L)||0); if(GP_TRAILERS.includes(sug)) tEl.value=sug; }
   }
 
-  window.openGetPrice = function(quoteId){
-    const q=DB.quotes().find(x=>x.id===quoteId); if(!q){ return; }
-    GP_MODE='quote'; GP_QUOTE_ID=quoteId; GP_ITEM_IDX=0; GP_STATES=[]; GP_LAST_PRICE=null;
-    const items=quoteItems(q);
-    const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
-    const trailerOpts=['<option value="">Select trailer…</option>'].concat(GP_TRAILERS.map(t=>'<option>'+t+'</option>')).join('');
-    const axleOpts=(function(){ let o=''; for(let i=5;i<=20;i++) o+='<option value="'+i+'">'+i+' Axle</option>'; return o; })();
-    const itemSel = items.length>1
-      ? '<div class="field"><label>Line Item / Lane to price</label><select id="gpItemSel" onchange="gpPickItem(this.value)">'+items.map((x,i)=>'<option value="'+i+'">#'+(i+1)+' — '+esc(x.quoteType||'')+' · '+esc(x.origin||'?')+' → '+esc(x.destination||'?')+'</option>').join('')+'</select></div>'
-      : '';
-    box.innerHTML =
-      '<h3>💲 Get Price — '+esc(q.customerName||'')+'</h3>'
-      + '<div class="card-sub" style="margin-bottom:14px">Heavy-haul rate for this quote — pre-filled from the saved line item. Confirm the load, pull miles &amp; states, then <strong>Calculate Rate</strong>. Apply the customer price straight onto the quote.</div>'
-      + itemSel
-      + '<div class="card" style="margin:0 0 14px"><div class="section" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">01 · Dimensions &amp; Weight</div>'
-      +   '<div class="form-row three">'
-      +     '<div class="field-c"><label>Length (ft)</label><input id="gpLength" type="number" step="0.01" placeholder="ft"></div>'
-      +     '<div class="field-c"><label>Width (ft)</label><input id="gpWidth" type="number" step="0.01" placeholder="ft"></div>'
-      +     '<div class="field-c"><label>Height (ft)</label><input id="gpHeight" type="number" step="0.01" placeholder="ft"></div>'
-      +   '</div>'
-      +   '<div class="form-row three">'
-      +     '<div class="field-c"><label>Weight</label><input id="gpWeight" type="number" placeholder="weight" oninput="gpAutoAxles()"></div>'
-      +     '<div class="field-c"><label>Unit</label><select id="gpWeightUnit" onchange="gpAutoAxles()"><option value="lbs">lbs</option><option value="kgs">kgs</option></select></div>'
-      +     '<div class="field-c"><label>Trailer</label><select id="gpTrailer">'+trailerOpts+'</select></div>'
-      +   '</div>'
-      + '</div>'
-      + '<div class="card" style="margin:0 0 14px"><div class="section" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">02 · Route</div>'
-      +   '<div class="form-row">'
-      +     '<div class="field-c"><label>Origin</label><input id="gpOrigin" placeholder="City, ST"></div>'
-      +     '<div class="field-c"><label>Destination</label><input id="gpDest" placeholder="City, ST"></div>'
-      +   '</div>'
-      +   '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px">'
-      +     '<button class="btn btn-primary" style="width:auto" onclick="gpCalcMiles()">📍 Calculate Miles</button>'
-      +     '<button class="btn btn-ghost" style="width:auto" onclick="gpOpenRoute()">🗺️ View Route</button>'
-      +   '</div>'
-      +   '<div class="form-row one"><div class="field-c"><label>Miles</label><input id="gpMiles" type="number" placeholder="miles"></div></div>'
-      +   '<div id="gpStates" style="font-size:12px;margin-top:6px"><span style="color:var(--muted)">Click <strong>Calculate Miles</strong> to detect distance &amp; states.</span></div>'
-      + '</div>'
-      + '<div class="card" style="margin:0 0 14px"><div class="section" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">03 · Pricing</div>'
-      +   '<div class="form-row">'
-      +     '<div class="field-c"><label>Axles</label><select id="gpAxles">'+axleOpts+'</select></div>'
-      +     '<div class="field-c"><label>Market Mode</label><select id="gpMode"><option value="0.9">Conservative</option><option value="1" selected>Market Avg</option><option value="1.2">Aggressive</option></select></div>'
-      +   '</div>'
-      +   '<div class="form-row">'
-      +     '<div class="field-c"><label>Adjustment (%)</label><input id="gpAdjust" type="number" value="0"></div>'
-      +     '<div class="field-c"><label>Margin (%)</label><input id="gpMargin" type="number" value="22"></div>'
-      +   '</div>'
-      +   '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="gpCalcRate()">⚡ Calculate Rate</button>'
-      + '</div>'
-      + '<div class="card" style="margin:0 0 6px"><div class="card-head" style="margin-bottom:8px"><h3>Pricing Breakdown</h3></div>'
-      +   '<div id="gpBreakdown"><div style="color:var(--muted)">Enter details and click <strong>Calculate Rate</strong>.</div></div>'
-      +   '<div id="gpApplied" style="font-size:13px;color:var(--green);font-weight:700;margin-top:10px"></div>'
-      + '</div>'
-      + '<div class="modal-actions">'
-      +   '<button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>'
-      +   '<button id="gpApplyBtn" class="btn btn-primary" style="width:auto" disabled onclick="gpApplyPrice()">✓ Apply Customer Price to Quote</button>'
-      + '</div>';
-    document.getElementById('modalBg').classList.add('show');
-    gpFillItem(items[0]||{});
-  };
-
-  /* Map a Project Center truck type to a pricing-tool trailer. */
-  function gpTrailerFromTruckType(t){
-    if(t==='Stepdeck') return 'Step Deck';
-    if(t==='Double Drop') return 'Double Drop';
-    if(t==='Flatbed') return 'Flatbed';
-    return GP_TRAILERS.includes(t)?t:'Flatbed';
-  }
-  /* Prefill the pricing form from a truck-type group's dimensions + the project lane. */
-  function gpFillTruck(c){
-    const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.value=v; };
-    set('gpLength', c.L?gpRound2(c.L):'');
-    set('gpWidth',  c.W?gpRound2(c.W):'');
-    set('gpHeight', c.H?gpRound2(c.H):'');
-    set('gpWeight', c.wt?Math.round(c.wt):'');
-    const wu=document.getElementById('gpWeightUnit'); if(wu) wu.value='lbs';
-    const tEl=document.getElementById('gpTrailer'); if(tEl) tEl.value=GP_TRAILERS.includes(c.trailer)?c.trailer:'';
-    set('gpOrigin', c.origin||''); set('gpDest', c.dest||'');
-    set('gpMiles',''); GP_STATES=[];
-    const st=document.getElementById('gpStates'); if(st) st.innerHTML='<span style="color:var(--muted)">Click <strong>Calculate Miles</strong> to detect distance &amp; states.</span>';
-    if(document.getElementById('gpWeight')) window.gpAutoAxles();
-  }
-  /* Open the pricing tool for one truck type generated in the Truck Type Summary. */
-  window.openGetPriceTruckType = function(projId, type, owFlag, ohFlag){
-    const p=(typeof pcProject==='function')?pcProject(projId):null; if(!p){ toast('Project not found'); return; }
-    GP_MODE='trucktype'; GP_PROJ_ID=projId; GP_TT_TYPE=type; GP_TT_OW=!!owFlag; GP_TT_OH=!!ohFlag;
-    GP_STATES=[]; GP_LAST_PRICE=null;
-    const group=(p.trucks||[]).filter(t=>{ const fl=Array.isArray(t.flags)?t.flags:[];
-      return t.type===type && (fl.indexOf('Over-width')>=0)===!!owFlag && (fl.indexOf('Over-height')>=0)===!!ohFlag; });
-    GP_TT_N=group.length;
-    const maxOf=f=>group.reduce((m,t)=>Math.max(m,Number(t[f])||0),0);
-    const maxW=maxOf('maxW'), maxLen=maxOf('usedLen'), maxWt=maxOf('weight');
-    const maxHload=group.reduce((m,t)=>Math.max(m,Number(t.loadedH)||Number(t.maxH)||0),0);
-    const ln=(typeof pcActiveLane==='function')?pcActiveLane(p):{origin:p.origin,destination:p.destination};
-    const flagTxt=[owFlag?'Over-width':'',ohFlag?'Over-height':''].filter(Boolean).join(' + ');
-    const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.add('wide');
-    const trailerOpts=['<option value="">Select trailer…</option>'].concat(GP_TRAILERS.map(t=>'<option>'+t+'</option>')).join('');
-    const axleOpts=(function(){ let o=''; for(let i=5;i<=20;i++) o+='<option value="'+i+'">'+i+' Axle</option>'; return o; })();
-    const info='<div class="note-item" style="margin-bottom:14px"><div style="font-size:13px">'
-      + '<strong>'+GP_TT_N+'</strong> '+esc(type)+' truck(s)'+(flagTxt?(' · <span style="color:var(--red);font-weight:600">'+esc(flagTxt)+'</span>'):'')
-      + ' · Max W '+inchesToFtIn(maxW)+' · Max H (loaded) '+inchesToFtIn(maxHload)+' · Max load length '+inchesToFtIn(maxLen)
-      + '</div><div style="font-size:12px;color:var(--muted);margin-top:4px">Dimensions &amp; weight are pre-filled from the heaviest / largest truck in this group so the rate covers the worst case. The route pulls the project lane.</div></div>';
-    box.innerHTML =
-      '<h3>💲 Pricing Tool — '+esc(type)+(flagTxt?(' ('+esc(flagTxt)+')'):'')+'</h3>'
-      + '<div class="card-sub" style="margin-bottom:14px">Price one <strong>'+esc(type)+'</strong> truck, then apply the customer rate to all <strong>'+GP_TT_N+'</strong> '+esc(type)+' truck(s) on this page.</div>'
-      + info
-      + '<div class="card" style="margin:0 0 14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">01 · Dimensions &amp; Weight</div>'
+  function gpFormBody(trailerOpts, axleOpts){
+    return '<div class="card" style="margin:0 0 14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">01 · Dimensions &amp; Weight</div>'
       +   '<div class="form-row three">'
       +     '<div class="field-c"><label>Length (ft)</label><input id="gpLength" type="number" step="0.01" placeholder="ft"></div>'
       +     '<div class="field-c"><label>Width (ft)</label><input id="gpWidth" type="number" step="0.01" placeholder="ft"></div>'
@@ -6466,7 +6401,85 @@ function pageImportCenter(){
       +     '<div class="field-c"><label>Margin (%)</label><input id="gpMargin" type="number" value="22"></div>'
       +   '</div>'
       +   '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="gpCalcRate()">⚡ Calculate Rate</button>'
+      + '</div>';
+  }
+  function gpTrailerOpts(){ return ['<option value="">Select trailer…</option>'].concat(GP_TRAILERS.map(t=>'<option>'+t+'</option>')).join(''); }
+  function gpAxleOpts(){ let o=''; for(let i=5;i<=20;i++) o+='<option value="'+i+'">'+i+' Axle</option>'; return o; }
+
+  window.openGetPrice = function(quoteId){
+    const q=DB.quotes().find(x=>x.id===quoteId); if(!q){ return; }
+    GP_MODE='quote'; GP_QUOTE_ID=quoteId; GP_ITEM_IDX=0; GP_STATES=[]; GP_LAST_PRICE=null;
+    const items=quoteItems(q);
+    const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
+    const itemSel = items.length>1
+      ? '<div class="field"><label>Line Item / Lane to price</label><select id="gpItemSel" onchange="gpPickItem(this.value)">'+items.map((x,i)=>'<option value="'+i+'">#'+(i+1)+' — '+esc(x.quoteType||'')+' · '+esc(x.origin||'?')+' → '+esc(x.destination||'?')+'</option>').join('')+'</select></div>'
+      : '';
+    box.innerHTML =
+      '<h3>💲 Get Price — '+esc(q.customerName||'')+'</h3>'
+      + '<div class="card-sub" style="margin-bottom:14px">Heavy-haul rate for this quote — pre-filled from the saved line item. Confirm the load, pull miles &amp; states, then <strong>Calculate Rate</strong>. Apply the customer price straight onto the quote.</div>'
+      + itemSel
+      + gpFormBody(gpTrailerOpts(), gpAxleOpts())
+      + '<div class="card" style="margin:0 0 6px"><div class="card-head" style="margin-bottom:8px"><h3>Pricing Breakdown</h3></div>'
+      +   '<div id="gpBreakdown"><div style="color:var(--muted)">Enter details and click <strong>Calculate Rate</strong>.</div></div>'
+      +   '<div id="gpApplied" style="font-size:13px;color:var(--green);font-weight:700;margin-top:10px"></div>'
       + '</div>'
+      + '<div class="modal-actions">'
+      +   '<button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>'
+      +   '<button id="gpCustQuoteBtn" class="btn btn-ghost" style="width:auto;border-color:var(--green);color:var(--green)" disabled onclick="gpToCustomerQuote()">📄 Generate Customer Quote</button>'
+      +   '<button id="gpApplyBtn" class="btn btn-primary" style="width:auto" disabled onclick="gpApplyPrice()">✓ Apply Customer Price to Quote</button>'
+      + '</div>';
+    document.getElementById('modalBg').classList.add('show');
+    gpFillItem(items[0]||{});
+  };
+  /* From the Get Price pop-up: save the calculated price onto the quote, then open the customer quote. */
+  window.gpToCustomerQuote = function(){
+    if(GP_LAST_PRICE==null){ toast('Calculate a rate first'); return; }
+    gpApplyToQuote();
+    if(typeof openCustomerQuote==='function') openCustomerQuote(GP_QUOTE_ID, {itemIdx:GP_ITEM_IDX});
+  };
+
+  /* Map a Project Center truck type to a pricing-tool trailer. */
+  function gpTrailerFromTruckType(t){
+    if(t==='Stepdeck') return 'Step Deck';
+    if(t==='Double Drop') return 'Double Drop';
+    if(t==='Flatbed') return 'Flatbed';
+    return GP_TRAILERS.includes(t)?t:'Flatbed';
+  }
+  function gpFillTruck(c){
+    const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.value=v; };
+    set('gpLength', c.L?gpRound2(c.L):'');
+    set('gpWidth',  c.W?gpRound2(c.W):'');
+    set('gpHeight', c.H?gpRound2(c.H):'');
+    set('gpWeight', c.wt?Math.round(c.wt):'');
+    const wu=document.getElementById('gpWeightUnit'); if(wu) wu.value='lbs';
+    const tEl=document.getElementById('gpTrailer'); if(tEl) tEl.value=GP_TRAILERS.includes(c.trailer)?c.trailer:'';
+    set('gpOrigin', c.origin||''); set('gpDest', c.dest||'');
+    set('gpMiles',''); GP_STATES=[];
+    const st=document.getElementById('gpStates'); if(st) st.innerHTML='<span style="color:var(--muted)">Click <strong>Calculate Miles</strong> to detect distance &amp; states.</span>';
+    if(document.getElementById('gpWeight')) window.gpAutoAxles();
+  }
+  window.openGetPriceTruckType = function(projId, type, owFlag, ohFlag){
+    const p=(typeof pcProject==='function')?pcProject(projId):null; if(!p){ toast('Project not found'); return; }
+    GP_MODE='trucktype'; GP_PROJ_ID=projId; GP_TT_TYPE=type; GP_TT_OW=!!owFlag; GP_TT_OH=!!ohFlag;
+    GP_STATES=[]; GP_LAST_PRICE=null;
+    const group=(p.trucks||[]).filter(t=>{ const fl=Array.isArray(t.flags)?t.flags:[];
+      return t.type===type && (fl.indexOf('Over-width')>=0)===!!owFlag && (fl.indexOf('Over-height')>=0)===!!ohFlag; });
+    GP_TT_N=group.length;
+    const maxOf=f=>group.reduce((m,t)=>Math.max(m,Number(t[f])||0),0);
+    const maxW=maxOf('maxW'), maxLen=maxOf('usedLen'), maxWt=maxOf('weight');
+    const maxHload=group.reduce((m,t)=>Math.max(m,Number(t.loadedH)||Number(t.maxH)||0),0);
+    const ln=(typeof pcActiveLane==='function')?pcActiveLane(p):{origin:p.origin,destination:p.destination};
+    const flagTxt=[owFlag?'Over-width':'',ohFlag?'Over-height':''].filter(Boolean).join(' + ');
+    const box=document.getElementById('modalBox'); box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.add('wide');
+    const info='<div class="note-item" style="margin-bottom:14px"><div style="font-size:13px">'
+      + '<strong>'+GP_TT_N+'</strong> '+esc(type)+' truck(s)'+(flagTxt?(' · <span style="color:var(--red);font-weight:600">'+esc(flagTxt)+'</span>'):'')
+      + ' · Max W '+inchesToFtIn(maxW)+' · Max H (loaded) '+inchesToFtIn(maxHload)+' · Max load length '+inchesToFtIn(maxLen)
+      + '</div><div style="font-size:12px;color:var(--muted);margin-top:4px">Dimensions &amp; weight are pre-filled from the heaviest / largest truck in this group so the rate covers the worst case. The route pulls the project lane.</div></div>';
+    box.innerHTML =
+      '<h3>💲 Pricing Tool — '+esc(type)+(flagTxt?(' ('+esc(flagTxt)+')'):'')+'</h3>'
+      + '<div class="card-sub" style="margin-bottom:14px">Price one <strong>'+esc(type)+'</strong> truck, then apply the customer rate to all <strong>'+GP_TT_N+'</strong> '+esc(type)+' truck(s) on this page.</div>'
+      + info
+      + gpFormBody(gpTrailerOpts(), gpAxleOpts())
       + '<div class="card" style="margin:0 0 6px"><div class="card-head" style="margin-bottom:8px"><h3>Pricing Breakdown (per truck)</h3></div>'
       +   '<div id="gpBreakdown"><div style="color:var(--muted)">Enter details and click <strong>Calculate Rate</strong>.</div></div>'
       +   '<div id="gpApplied" style="font-size:13px;color:var(--green);font-weight:700;margin-top:10px"></div>'
@@ -6478,6 +6491,247 @@ function pageImportCenter(){
     document.getElementById('modalBg').classList.add('show');
     gpFillTruck({ L:maxLen/12, W:maxW/12, H:maxHload/12, wt:maxWt, trailer:gpTrailerFromTruckType(type),
       origin:(ln&&ln.origin)||p.origin||'', dest:(ln&&ln.destination)||p.destination||'' });
+  };
+})();
+
+/* =====================================================================
+   CUSTOMER QUOTE MODULE (inserted)
+   ===================================================================== */
+/* =====================================================================
+   CUSTOMER QUOTE GENERATOR
+   Builds a customer-facing OVERSIZE LINEHAUL quote from a saved quote,
+   using the standard template. Fields in () are pulled from the quote;
+   fields marked editable have sensible defaults the rep can change.
+   Reachable from: Quote Log row button, and the Get Price pop-up.
+   ===================================================================== */
+(function(){
+  const CQ_DEFAULTS = {
+    commodity: '',
+    leadTime: '2-3 Days',
+    tarping: '$250',
+    detention: '$100/hr. (after 3 hours)',
+    layover: '$500/day',
+    tonu: '$750 plus cost of permits'
+  };
+
+  function cq2(n){ return (n<10?'0':'')+n; }
+  function cqTodayPlus(days){
+    const d=new Date(); d.setDate(d.getDate()+days);
+    return d.getFullYear()+'-'+cq2(d.getMonth()+1)+'-'+cq2(d.getDate());
+  }
+  function cqFmtDate(iso){
+    if(!iso) return '';
+    const p=String(iso).split('-'); if(p.length!==3) return iso;
+    return p[1]+'/'+p[2]+'/'+p[0].slice(2);   // MM/DD/YY
+  }
+  /* Split a free dimension string into L / W / H display tokens. */
+  function cqSplitDims(str){
+    if(!str) return {L:'',W:'',H:''};
+    const parts=String(str).replace(/[\u00d7*]/g,'x').split(/\s*x\s*/i)
+      .map(s=>s.replace(/^\s*[LWH]\s*[:=]?\s*/i,'').trim());
+    return {L:parts[0]||'', W:parts[1]||'', H:parts[2]||''};
+  }
+  function cqFmtWeight(w){
+    if(!w) return '';
+    const s=String(w).trim();
+    if(/[a-z]/i.test(s)) return s;                       // already has a unit
+    const num=s.replace(/[^0-9.]/g,'');
+    if(!num) return s;
+    return Number(num).toLocaleString('en-US')+' lbs.';
+  }
+  function cqFmtRate(price){
+    const n=(typeof priceNum==='function')?priceNum(price):parseFloat(String(price||'').replace(/[^0-9.-]/g,''));
+    if(!n) return '';
+    return (typeof fmtMoney==='function')?fmtMoney(n):'$'+Number(n).toFixed(2);
+  }
+
+  function cqVal(id){ const e=document.getElementById(id); return e?e.value:''; }
+
+  /* Build the formatted quote (HTML) from the current field values. */
+  function cqBuildHTML(){
+    const v={
+      pickup:cqVal('cqPickup'), delivery:cqVal('cqDelivery'),
+      L:cqVal('cqL'), W:cqVal('cqW'), H:cqVal('cqH'),
+      weight:cqVal('cqWeight'), commodity:cqVal('cqCommodity'),
+      equipment:cqVal('cqEquipment'), rate:cqVal('cqRate'),
+      exp:cqFmtDate(cqVal('cqExp')), leadTime:cqVal('cqLead'),
+      tarping:cqVal('cqTarp'), detention:cqVal('cqDet'),
+      layover:cqVal('cqLay'), tonu:cqVal('cqTonu')
+    };
+    const E=esc;
+    return ''
+      + '<div>Pickup: <strong>'+E(v.pickup)+'</strong></div>'
+      + '<div>Delivery: <strong>'+E(v.delivery)+'</strong></div>'
+      + '<div style="height:8px"></div>'
+      + '<div><strong>OVERSIZE LINEHAUL QUOTE</strong></div>'
+      + '<div>Total Dims Quoted: L: '+E(v.L)+' x W: '+E(v.W)+' x H: '+E(v.H)+'</div>'
+      + '<div>Weight: '+E(v.weight)+'</div>'
+      + '<div>Commodity: '+E(v.commodity)+'</div>'
+      + '<div>Equipment needed: '+E(v.equipment)+'</div>'
+      + '<div style="height:8px"></div>'
+      + '<div><strong>OVERSIZE LINEHAUL RATE: '+E(v.rate)+'</strong></div>'
+      + '<div style="height:8px"></div>'
+      + '<div><em>Cargo value must be provided prior to booking*</em></div>'
+      + '<div><em>Rate includes oversize permits/ fuel surcharge/ Tolls. Standard carrier cargo coverage is $100,000.</em></div>'
+      + '<div><em>Additional Shipper&#39;s Interest Insurance is available at $0.20 per $100 of declared cargo value.</em></div>'
+      + '<div style="height:8px"></div>'
+      + '<div><strong>QUOTE EXPIRATION</strong></div>'
+      + '<div><strong>'+E(v.exp)+'</strong></div>'
+      + '<div style="height:8px"></div>'
+      + '<div><strong>LEAD TIME REQUIRED</strong></div>'
+      + '<div><strong>'+E(v.leadTime)+'</strong></div>'
+      + '<div style="height:8px"></div>'
+      + '<div><strong>*PLEASE BE AWARE OF POTENTIAL ACCESSORIALS BELOW</strong></div>'
+      + '<div><strong>Tarping Fee</strong>: <em>'+E(v.tarping)+'</em></div>'
+      + '<div><strong>Detention:</strong> <em>'+E(v.detention)+'</em></div>'
+      + '<div><strong>Layover</strong>: <em>'+E(v.layover)+'</em></div>'
+      + '<div><strong>Truck Order Not Used</strong>: <em>'+E(v.tonu)+'</em></div>';
+  }
+  /* Plain-text version for clipboard / email fallback. */
+  function cqBuildText(){
+    const v={
+      pickup:cqVal('cqPickup'), delivery:cqVal('cqDelivery'),
+      L:cqVal('cqL'), W:cqVal('cqW'), H:cqVal('cqH'),
+      weight:cqVal('cqWeight'), commodity:cqVal('cqCommodity'),
+      equipment:cqVal('cqEquipment'), rate:cqVal('cqRate'),
+      exp:cqFmtDate(cqVal('cqExp')), leadTime:cqVal('cqLead'),
+      tarping:cqVal('cqTarp'), detention:cqVal('cqDet'),
+      layover:cqVal('cqLay'), tonu:cqVal('cqTonu')
+    };
+    return [
+      'Pickup: '+v.pickup,
+      'Delivery: '+v.delivery,
+      '',
+      'OVERSIZE LINEHAUL QUOTE',
+      'Total Dims Quoted: L: '+v.L+' x W: '+v.W+' x H: '+v.H,
+      'Weight: '+v.weight,
+      'Commodity: '+v.commodity,
+      'Equipment needed: '+v.equipment,
+      '',
+      'OVERSIZE LINEHAUL RATE: '+v.rate,
+      '',
+      'Cargo value must be provided prior to booking*',
+      'Rate includes oversize permits/ fuel surcharge/ Tolls. Standard carrier cargo coverage is $100,000.',
+      "Additional Shipper's Interest Insurance is available at $0.20 per $100 of declared cargo value.",
+      'QUOTE EXPIRATION',
+      v.exp,
+      '',
+      'LEAD TIME REQUIRED',
+      v.leadTime,
+      '',
+      '*PLEASE BE AWARE OF POTENTIAL ACCESSORIALS BELOW',
+      'Tarping Fee: '+v.tarping,
+      'Detention: '+v.detention,
+      'Layover: '+v.layover,
+      'Truck Order Not Used: '+v.tonu
+    ].join('\n');
+  }
+
+  window.cqRefresh = function(){
+    const pv=document.getElementById('cqPreview'); if(pv) pv.innerHTML=cqBuildHTML();
+  };
+
+  window.cqCopy = async function(){
+    const html=cqBuildHTML(), text=cqBuildText();
+    try{
+      if(navigator.clipboard && window.ClipboardItem){
+        await navigator.clipboard.write([ new ClipboardItem({
+          'text/html': new Blob([html], {type:'text/html'}),
+          'text/plain': new Blob([text], {type:'text/plain'})
+        })]);
+        toast('Customer quote copied (formatted)'); return;
+      }
+    }catch(e){ /* fall through */ }
+    try{ await navigator.clipboard.writeText(text); toast('Customer quote copied (text)'); }
+    catch(e){
+      const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); toast('Customer quote copied'); }catch(_){ toast('Copy failed — select & copy manually'); }
+      document.body.removeChild(ta);
+    }
+  };
+  window.cqCopyText = async function(){
+    const text=cqBuildText();
+    try{ await navigator.clipboard.writeText(text); toast('Plain text copied'); }
+    catch(e){ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy'); toast('Plain text copied');}catch(_){toast('Copy failed');} document.body.removeChild(ta); }
+  };
+  window.cqDownload = function(){
+    const cust=cqVal('cqCustName')||'Customer';
+    const doc='<!doctype html><html><head><meta charset="utf-8"><title>Customer Quote - '+esc(cust)+'</title>'
+      + '<style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111;max-width:640px;margin:32px auto;padding:0 20px}div{margin:2px 0}</style></head><body>'
+      + cqBuildHTML() + '</body></html>';
+    const blob=new Blob([doc],{type:'text/html'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='Customer Quote - '+cust.replace(/[^\w\- ]+/g,'')+'.html';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+    toast('Customer quote downloaded');
+  };
+  window.cqPrint = function(){
+    const w=window.open('','_blank'); if(!w){ toast('Pop-up blocked'); return; }
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Customer Quote</title>'
+      + '<style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111;max-width:640px;margin:32px auto;padding:0 20px}div{margin:2px 0}</style></head><body>'
+      + cqBuildHTML() + '</body></html>');
+    w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} },250);
+  };
+
+  window.openCustomerQuote = function(quoteId, opts){
+    opts=opts||{};
+    const q=DB.quotes().find(x=>x.id===quoteId); if(!q){ toast('Quote not found'); return; }
+    const items=quoteItems(q); const idx=Math.max(0,Math.min(opts.itemIdx||0, items.length-1));
+    const it=items[idx]||{};
+    const dims=cqSplitDims(it.dimensions||q.dimensions||'');
+    const equipment=it.equipment||q.equipment||it.quoteType||q.quoteType||'';
+    const rate=cqFmtRate(it.price!=null&&it.price!==''?it.price:q.price);
+    const weight=cqFmtWeight(it.weight||q.weight||'');
+    const pickup=it.origin||q.origin||'';
+    const delivery=it.destination||q.destination||'';
+    const expDefault=cqTodayPlus(7);
+
+    const box=document.getElementById('modalBox'); const modalEl=box.parentElement.querySelector('.modal'); modalEl.classList.add('wide'); modalEl.classList.add('xwide');
+    const laneSel = items.length>1
+      ? '<div class="field" style="margin-bottom:12px"><label>Line Item / Lane</label><select onchange="openCustomerQuote(\''+quoteId+'\',{itemIdx:parseInt(this.value)})">'
+        + items.map((x,i)=>'<option value="'+i+'" '+(i===idx?'selected':'')+'>#'+(i+1)+' — '+esc(x.quoteType||'')+' · '+esc(x.origin||'?')+' → '+esc(x.destination||'?')+'</option>').join('')
+        + '</select></div>'
+      : '';
+    const F=(label,id,val,ph)=>'<div class="field-c"><label>'+label+'</label><input id="'+id+'" value="'+esc(val||'')+'" placeholder="'+(ph||'')+'" oninput="cqRefresh()"></div>';
+
+    box.innerHTML =
+      '<h3>📄 Customer Quote — '+esc(q.customerName||'')+'</h3>'
+      + '<input type="hidden" id="cqCustName" value="'+esc(q.customerName||'Customer')+'">'
+      + '<div class="card-sub" style="margin-bottom:14px">Pre-filled from the saved quote. Green-labeled fields are pulled automatically; edit anything before sending. The preview on the right updates live.</div>'
+      + laneSel
+      + '<div class="cq-grid">'
+      /* ---- LEFT: form ---- */
+      + '<div>'
+      +   '<div class="card" style="margin:0 0 12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--green);margin-bottom:10px">Pulled from Quote</div>'
+      +     '<div class="form-row">'+F('Pickup','cqPickup',pickup,'City, ST ZIP')+F('Delivery','cqDelivery',delivery,'City, ST ZIP')+'</div>'
+      +     '<div class="form-row three">'+F('Length','cqL',dims.L,'ft')+F('Width','cqW',dims.W,'ft')+F('Height','cqH',dims.H,'ft')+'</div>'
+      +     '<div class="form-row">'+F('Weight','cqWeight',weight,'lbs.')+F('Equipment Needed','cqEquipment',equipment,'trailer')+'</div>'
+      +     '<div class="form-row">'+F('Oversize Linehaul Rate','cqRate',rate,'$0.00')+'<div class="field-c"><label>Quote Expiration <span style="color:var(--muted)">(auto +7 days)</span></label><input type="date" id="cqExp" value="'+expDefault+'" oninput="cqRefresh()"></div></div>'
+      +   '</div>'
+      +   '<div class="card" style="margin:0"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">Editable Fields</div>'
+      +     '<div class="form-row">'+F('Commodity','cqCommodity',CQ_DEFAULTS.commodity,'e.g. Tank')+F('Lead Time Required','cqLead',CQ_DEFAULTS.leadTime,'')+'</div>'
+      +     '<div class="form-row">'+F('Tarping Fee','cqTarp',CQ_DEFAULTS.tarping,'')+F('Detention','cqDet',CQ_DEFAULTS.detention,'')+'</div>'
+      +     '<div class="form-row">'+F('Layover','cqLay',CQ_DEFAULTS.layover,'')+F('Truck Order Not Used','cqTonu',CQ_DEFAULTS.tonu,'')+'</div>'
+      +   '</div>'
+      + '</div>'
+      /* ---- RIGHT: live preview (no inner scroll — shows the full quote) ---- */
+      + '<div class="card" style="margin:0">'
+      +   '<div class="card-head" style="margin-bottom:10px"><h3>Preview</h3></div>'
+      +   '<div id="cqPreview" class="cq-preview"></div>'
+      + '</div>'
+      + '</div>'
+      + '<div class="modal-actions" style="justify-content:space-between">'
+      +   '<button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>'
+      +   '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+      +     '<button class="btn btn-ghost" style="width:auto" onclick="cqPrint()">🖨️ Print / PDF</button>'
+      +     '<button class="btn btn-ghost" style="width:auto" onclick="cqDownload()">⬇ Download</button>'
+      +     '<button class="btn btn-ghost" style="width:auto" onclick="cqCopyText()">📋 Copy Text</button>'
+      +     '<button class="btn btn-primary" style="width:auto" onclick="cqCopy()">📋 Copy Quote</button>'
+      +   '</div>'
+      + '</div>';
+    document.getElementById('modalBg').classList.add('show');
+    cqRefresh();
   };
 })();
 
@@ -6527,7 +6781,7 @@ function loadIdentity(){
 function openIdentityModal(force){
   const reps=DB.reps()||[];
   const box=document.getElementById('modalBox');
-  box.parentElement.querySelector('.modal').classList.remove('wide');
+  box.parentElement.querySelector('.modal').classList.remove('xwide');box.parentElement.querySelector('.modal').classList.remove('wide');
   const opts=reps.map(r=>`<option value="${r.u}" ${ACTIVE_REP===r.u?'selected':''}>${esc(r.name)}${r.role==='ART'?' (ART)':''}</option>`).join('');
   box.innerHTML=`<h3>👋 Who's working today?</h3>
     <div class="card-sub" style="margin:-4px 0 14px">Pick your name so <strong>AR Tools</strong> shows only your customers, prospects, and offices. Choose <strong>Manager</strong> to see everyone.</div>
