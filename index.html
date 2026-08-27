@@ -7219,6 +7219,13 @@ function openOppParser(){
       <div>
         <div class="form-row"><div class="field-c"><label>Target Office</label><select id="opOffice">${oppOfficeOptions(OPP_OFF!=='all'?OPP_OFF:'')}</select></div>
           <div class="field-c"><label>Broker (whole batch)</label><input id="opBroker" list="opBrokerList" value="${OPP_BRK!=='all'?esc(OPP_BRK):''}" placeholder="e.g. Alan Cox"></div></div>
+        <div class="form-row one"><div class="field-c"><label>Add these as</label>
+          <div class="filterbar" style="margin:0">
+            <button type="button" class="chip ${OPP_PARSE_REL!=='Customer'?'active':''}" onclick="oppParseSetRel('Prospect')">🧲 Prospect</button>
+            <button type="button" class="chip ${OPP_PARSE_REL==='Customer'?'active':''}" onclick="oppParseSetRel('Customer')">🏢 Customer</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:5px">Applies to the whole batch — you can change any record's type later from its card.</div>
+        </div></div>
         <div class="field"><label>Paste opportunities</label><textarea id="opIn" style="min-height:300px" placeholder="1. Seagate Technology LLC&#10;Industry: Data Storage&#10;Likelihood: 7/10&#10;Why: ...&#10;&#10;2. Next Company ..."></textarea></div>
         <div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-primary" style="width:auto" onclick="doOppParse()">🔍 Parse Preview</button></div>
       </div>
@@ -7232,6 +7239,13 @@ function openOppParser(){
       <button class="btn btn-primary" id="opAddBtn" style="width:auto" disabled onclick="commitOppParse()">Add to Funnel →</button>
     </div>`;
   document.getElementById('modalBg').classList.add('show');
+}
+function oppParseSetRel(rel){ OPP_PARSE_REL=(rel==='Customer')?'Customer':'Prospect'; renderOppParseRel(); }
+function renderOppParseRel(){
+  const bar=document.querySelector('#modalBox .filterbar'); if(!bar) return;
+  const btns=bar.querySelectorAll('.chip');
+  if(btns[0]) btns[0].classList.toggle('active', OPP_PARSE_REL!=='Customer');
+  if(btns[1]) btns[1].classList.toggle('active', OPP_PARSE_REL==='Customer');
 }
 function doOppParse(){
   const text=val('opIn'); if(!text.trim()){ toast('Paste some text first'); return; }
@@ -7261,14 +7275,19 @@ function commitOppParse(){
   const office=val('opOffice'); const broker=val('opBroker');
   const chosen=OPP_PARSE.filter(r=>r._on&&(r.company||'').trim());
   if(!chosen.length){ toast('Nothing selected'); return; }
+  const rel=(OPP_PARSE_REL==='Customer')?'Customer':'Prospect';
   const arr=oppList(); let n=0;
   chosen.forEach(r=>{ oppNormalize(r);
     arr.push({ id:'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)+n, office, broker:broker||r.broker||'',
       company:r.company, industry:r.industry||'', likelihood:r.likelihood||'', tier:r.tier||oppTierFromLike(r.likelihood)||'Tier 3 - Medium',
       equipment:r.equipment||'', why:r.why||'', fact:r.fact||'', presence:r.presence||'', question:r.question||'', notes:r.notes||'',
-      brokerContacted:false, nseConversation:false, readyToQuote:false, wonCustomer:false, status:'1 - No Communication', notesLog:[] });
+      relationship:rel, brokerContacted:false, nseConversation:false, readyToQuote:false, wonCustomer:false, status:'1 - No Communication', notesLog:[] });
     n++; });
-  oppSave(arr); closeModal(); OPP_OFF=office; route(); toast('Added '+n+' prospect'+(n>1?'s':'')+' to '+office);
+  if(rel==='Customer'){ const c=DB.customers();
+    chosen.forEach(r=>{ const key=(r.company||'').trim(); if(key) c[key]=Object.assign({}, c[key], {manual:true, fromBroker:broker||r.broker||'', office:office||'', fromFunnel:true}); });
+    DB.saveCustomers(c); }
+  oppSave(arr); closeModal(); OPP_OFF=office; route();
+  toast('Added '+n+' '+(rel==='Customer'?'customer':'prospect')+(n>1?'s':'')+' to '+office);
 }
 
 /* ---- manager summary ---- */
@@ -7790,8 +7809,17 @@ function oppExtrasHTML(o){
       <option value="">— None —</option>
       ${OPP_CLASS.map(c=>`<option ${o.classification===c?'selected':''}>${c}</option>`).join('')}
     </select>`;
+  const rel = oppRelationship(o);
+  const relSel = `<div class="filterbar" style="margin:0">
+      <button type="button" class="chip ${rel!=='Customer'?'active':''}" onclick="oppSetRelationship('${o.id}','Prospect')">🧲 Prospect</button>
+      <button type="button" class="chip ${rel==='Customer'?'active':''}" onclick="oppSetRelationship('${o.id}','Customer')">🏢 Customer</button>
+    </div>`;
   return `
     <div class="dsec" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:6px">Relationship ${oppRelBadge(o)}</div>
+      ${relSel}
+    </div>
+    <div class="dsec" style="margin-top:14px">
       <div style="display:flex;gap:18px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:6px">Funnel Stage</div>
@@ -7910,15 +7938,16 @@ window.funnelListView = function(list){
       <td>${esc(o.office||'—')}</td>
       <td>${esc(o.broker||'—')}</td>
       <td><strong class="colink" onclick="openOppDetail('${o.id}')" style="cursor:pointer">${esc(o.company)}</strong> ${fu}<div style="font-size:11px;color:var(--muted)">${esc(o.industry||'')}</div></td>
+      <td>${oppRelBadge(o)}</td>
       <td style="color:${o.likelihood>=9?'var(--green)':o.likelihood>=8?'var(--accent)':'var(--muted)'};font-weight:800;text-align:center">${esc(o.likelihood||'—')}</td>
       <td>${esc(o.tier||'')}</td>
       <td><div class="qlog-acts"><button class="icon-btn" title="View" onclick="openOppDetail('${o.id}')">👁️</button><button class="icon-btn" title="Edit" onclick="openOppForm('${o.id}')">✏️</button><button class="icon-btn del" title="Delete" onclick="oppDelete('${o.id}')">🗑️</button></div></td>
     </tr>`;
   }).join('');
   return `<div class="card"><div class="card-head"><h3>All Opportunities <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3></div>
-    <div class="table-wrap"><table style="min-width:900px">
-      <thead><tr><th>Funnel Stage</th><th>Office</th><th>Broker</th><th>Company / Industry</th><th>Likely</th><th>Tier</th><th>Actions</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="7" class="empty">No opportunities match. Add one or adjust filters.</td></tr>'}</tbody>
+    <div class="table-wrap"><table style="min-width:960px">
+      <thead><tr><th>Funnel Stage</th><th>Office</th><th>Broker</th><th>Company / Industry</th><th>Type</th><th>Likely</th><th>Tier</th><th>Actions</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" class="empty">No opportunities match. Add one or adjust filters.</td></tr>'}</tbody>
     </table></div></div>`;
 };
 
@@ -8029,8 +8058,23 @@ function oppProgStatus(o){
   if(o.brokerContacted) return 'broker';
   return 'none';
 }
-function oppIsCustomer(o){ return o.classification==='New Customer Close' || o.classification==='Reactivation' || oppStage(o)==='customer'; }
-function oppIsProspect(o){ return !oppIsCustomer(o); }
+/* ---- Prospect vs Customer relationship (explicit flag wins; legacy inference as fallback) ---- */
+function oppRelationship(o){
+  if(o && o.relationship==='Customer') return 'Customer';
+  if(o && o.relationship==='Prospect') return 'Prospect';
+  return (o && (o.classification==='New Customer Close' || o.classification==='Reactivation' || oppStage(o)==='customer')) ? 'Customer' : 'Prospect';
+}
+function oppIsCustomer(o){ return oppRelationship(o)==='Customer'; }
+function oppIsProspect(o){ return oppRelationship(o)==='Prospect'; }
+function oppRelBadge(o){ return oppIsCustomer(o)
+  ? `<span class="pill" style="background:#e3f6e9;color:#1b873f" title="Marked as Customer">🏢 Customer</span>`
+  : `<span class="pill" style="background:#eaf1fb;color:#134074" title="Marked as Prospect">🧲 Prospect</span>`; }
+function oppSetRelationship(id,rel){ const arr=oppList(); const o=arr.find(x=>x.id===id); if(!o) return;
+  o.relationship=(rel==='Customer')?'Customer':'Prospect'; oppSave(arr);
+  if(rel==='Customer'){ const c=DB.customers(); const key=(o.company||'').trim();
+    if(key){ c[key]=Object.assign({}, c[key], {manual:true, fromBroker:o.broker||'', office:o.office||'', fromFunnel:true}); DB.saveCustomers(c); } }
+  if(typeof OPP_DETAIL!=='undefined' && OPP_DETAIL===id) openOppDetail(id); route();
+  toast(rel==='Customer'?'Marked as Customer':'Marked as Prospect'); }
 function oppVolNum(o){ if(!o.intake) return 0; return parseFloat(String(o.intake.volumeQty||'').replace(/[^0-9.]/g,''))||0; }
 
 /* =====================================================================
@@ -8364,6 +8408,7 @@ window.funnelCard = function(o,f){
   const fu=oppFollowBadge(o);
   const noteN=(o.notesLog||[]).length; const noteBadge=noteN?`<span class="pill type" title="${noteN} note(s)">📝 ${noteN}</span>`:'';
   const intakeWarn=(stage==='quoting'&&!o.intake)?`<span class="pill pending" title="Quoting info needed">🧾 Info needed</span>`:'';
+  const relBadge=oppRelBadge(o);
   const classBadge=oppClassBadge(o);
   const volText=o.intake?oppVolumeText(o.intake):''; const volBadge=volText?`<span class="pill vol" title="Volume">📦 ${esc(volText)}</span>`:'';
   const star=`<button class="rowbtn" style="background:none;padding:0 2px;font-size:15px;color:${o.topOpp?'var(--accent)':'#c9d2dc'}" onclick="event.stopPropagation();oppToggleTop('${o.id}')" title="${o.topOpp?'Remove from Top Opps':'Mark as Top Opp'}">${o.topOpp?'★':'☆'}</button>`;
@@ -8381,7 +8426,7 @@ window.funnelCard = function(o,f){
     </div>
     <div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(o.broker||'—')}${o.office?(' · '+esc(o.office)):''}</div>
     <div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
-      <span class="tag t${tn>4?4:tn}">${esc(o.tier||'')}</span>${classBadge}${wonPill}${quoteBadge}${volBadge}${noteBadge}${fu}${intakeWarn}
+      ${relBadge}<span class="tag t${tn>4?4:tn}">${esc(o.tier||'')}</span>${classBadge}${wonPill}${quoteBadge}${volBadge}${noteBadge}${fu}${intakeWarn}
     </div>
     ${o.industry?`<div style="font-size:11px;color:var(--muted);margin-top:6px">${esc(o.industry)}</div>`:''}
     <div style="margin-top:9px;display:flex;gap:5px;flex-wrap:wrap">
@@ -8423,7 +8468,7 @@ function funnelStageFocus(list){
           <span style="font-weight:800;color:${o.likelihood>=9?'var(--green)':'var(--accent)'};margin-left:6px">${esc(o.likelihood||'—')}/10</span></div>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <span class="tag">${esc(o.tier||'')}</span>${oppClassBadge(o)}${vt?`<span class="pill vol">📦 ${esc(vt)}</span>`:''}<span class="pill type">📝 ${(o.notesLog||[]).length}</span>${oppFollowBadge(o)}
+        ${oppRelBadge(o)}<span class="tag">${esc(o.tier||'')}</span>${oppClassBadge(o)}${vt?`<span class="pill vol">📦 ${esc(vt)}</span>`:''}<span class="pill type">📝 ${(o.notesLog||[]).length}</span>${oppFollowBadge(o)}
       </div>
       ${o.why?`<div style="font-size:12.5px;color:var(--muted);margin-top:8px">${esc(o.why.slice(0,220))}${o.why.length>220?'…':''}</div>`:''}
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
