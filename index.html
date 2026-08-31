@@ -10062,5 +10062,225 @@ window.fcsvSetRemove=fcsvSetRemove; window.fcsvRemoveAll=fcsvRemoveAll;
 try{ if(CURRENT_PAGE==='importcenter' && typeof route==='function') route(); }catch(e){}
 </script>
 
+<script>
+/* ===================================================================
+   TOP CUSTOMER UPGRADE v8
+   -------------------------------------------------------------------
+   1) Fix the Top-Customer highlight rule — a proper themed class that
+      survives hover and works in dark mode (replaces the inline cream
+      background that vanished on hover / was unreadable in dark mode).
+   2) Growth chart: EACH customer gets its OWN line (multi-series),
+      instead of a single aggregated total line.
+   3) Toggle the growth chart between a Line graph and a Horizontal
+      Bar graph (stacked by quarter, ranked by NSE Total).
+   =================================================================== */
+
+/* ---- inject the highlight CSS once (works in light + dark, survives hover) ---- */
+(function tcInjectCSS(){
+  if(document.getElementById('tcTopStyle')) return;
+  const st=document.createElement('style'); st.id='tcTopStyle';
+  st.textContent=`
+    tr.tc-top td{ background:rgba(224,122,0,.10) !important; }
+    tr.tc-top:hover td{ background:rgba(224,122,0,.17) !important; }
+    tr.tc-top td:first-child{ box-shadow:inset 3px 0 0 var(--accent); }
+    body.dark tr.tc-top td{ background:rgba(240,138,29,.16) !important; }
+    body.dark tr.tc-top:hover td{ background:rgba(240,138,29,.24) !important; }
+    .tc-chart-wrap{ overflow-x:auto; }
+  `;
+  document.head.appendChild(st);
+})();
+
+/* ---- chart state + palette ---- */
+let TC_CHART = 'line';   /* 'line' | 'hbar' */
+const TC_PALETTE = ['#134074','#e07a00','#1b873f','#8e44ad','#16a085','#c0392b',
+  '#2980b9','#d35400','#7f8c8d','#f39c12','#2c3e50','#27ae60','#9b59b6','#e74c3c',
+  '#0e7490','#b7791f','#6d28d9','#0f766e'];
+function tcMoneyShort(n){ n=Number(n)||0; if(Math.abs(n)>=1000) return '$'+(Math.round(n/100)/10).toLocaleString('en-US')+'k'; return '$'+Math.round(n); }
+
+/* ---- per-customer chart data: one series per customer across the quarter columns ---- */
+function tcChartData(){
+  const cols=tcAllQuarterCols();
+  const list=tcList().filter(c=>tcTotal(c.meta)>0).sort((a,b)=>tcTotal(b.meta)-tcTotal(a.meta));
+  const series=list.map((c,i)=>({
+    name:c.name,
+    color:TC_PALETTE[i%TC_PALETTE.length],
+    total:tcTotal(c.meta),
+    vals:cols.map(col=>{ const raw=(c.meta.quarters||{})[col]; return (raw==null||raw==='')?null:(Number(raw)||0); })
+  }));
+  return {cols, series};
+}
+
+/* ---- multi-line SVG (one line per customer) + legend ---- */
+function tcMultiLineSVG(cols, series){
+  if(!cols.length || !series.length) return '<div class="empty" style="padding:22px">Add customers with quarterly revenue to chart growth. Each customer appears as its own line.</div>';
+  const W=880,H=300,padL=58,padR=18,padT=18,padB=40;
+  const plotW=W-padL-padR, plotH=H-padT-padB, n=cols.length;
+  let max=0; series.forEach(s=>s.vals.forEach(v=>{ if(v!=null && v>max) max=v; })); max=Math.max(1,max);
+  const X=i=> n<=1 ? padL+plotW/2 : padL+plotW*i/(n-1);
+  const Y=v=> padT+plotH*(1-v/max);
+  let grid='';
+  for(let g=0;g<=4;g++){ const gv=max*g/4, gy=Y(gv);
+    grid+=`<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${padL+plotW}" y2="${gy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
+        +`<text x="${padL-8}" y="${(gy+3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)">${tcMoneyShort(gv)}</text>`;
+  }
+  const xlab=cols.map((c,i)=>`<text x="${X(i).toFixed(1)}" y="${H-14}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${esc(c)}</text>`).join('');
+  let lines='';
+  series.forEach(s=>{
+    const pts=[]; s.vals.forEach((v,i)=>{ if(v!=null) pts.push([X(i),Y(v),v,i]); });
+    if(pts.length>1) lines+=`<polyline points="${pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
+    pts.forEach(p=>{ lines+=`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.4" fill="${s.color}"><title>${esc(s.name)} — ${esc(cols[p[3]])}: ${tcMoney(p[2])}</title></circle>`; });
+  });
+  const svg=`<div class="tc-chart-wrap"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:520px;height:auto;max-height:320px" preserveAspectRatio="xMidYMid meet">
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT+plotH}" stroke="var(--line)"/>${grid}${lines}${xlab}
+  </svg></div>`;
+  const legend=`<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px">`+series.map(s=>
+    `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px"><span style="width:12px;height:12px;border-radius:3px;background:${s.color};display:inline-block"></span>${esc(s.name)} <strong style="color:var(--ink)">${tcMoneyShort(s.total)}</strong></span>`).join('')+`</div>`;
+  return svg+legend;
+}
+
+/* ---- horizontal bars, one per customer, stacked by quarter, ranked by NSE Total ---- */
+function tcHBarSVG(cols, series){
+  if(!series.length) return '<div class="empty" style="padding:22px">Add customers with quarterly revenue to chart growth.</div>';
+  const maxTotal=Math.max(1,...series.map(s=>s.total));
+  const qcolor=i=>TC_PALETTE[i%TC_PALETTE.length];
+  const rows=series.map(s=>{
+    const pct=Math.max(2, s.total/maxTotal*100);
+    let segs='';
+    cols.forEach((col,i)=>{ const v=s.vals[i]; if(v){ const w=v/s.total*100;
+      segs+=`<div title="${esc(col)}: ${tcMoney(v)}" style="width:${w}%;background:${qcolor(i)}"></div>`; }});
+    if(!segs) segs=`<div style="width:100%;background:var(--line)"></div>`;
+    return `<div style="display:flex;align-items:center;gap:10px">
+      <div style="width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:600" title="${esc(s.name)}">${esc(s.name)}</div>
+      <div style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;height:20px;overflow:hidden">
+        <div style="height:100%;display:flex;width:${pct}%">${segs}</div>
+      </div>
+      <div style="width:92px;text-align:right;font-weight:800;font-size:13px;color:var(--ink)">${tcMoney(s.total)}</div>
+    </div>`;
+  }).join('');
+  const legend=`<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px">`+cols.map((col,i)=>
+    `<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px"><span style="width:11px;height:11px;border-radius:3px;background:${qcolor(i)};display:inline-block"></span>${esc(col)}</span>`).join('')+`</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:9px">${rows}</div>${legend}`;
+}
+
+/* ---- the chart card (toggle + chosen chart) ---- */
+function tcGrowthCard(){
+  const {cols, series}=tcChartData();
+  /* QoQ aggregate chip (unchanged) */
+  const agg=tcQuarterSeries();
+  const g=(function(){ if(agg.length<2) return {pct:null}; const last=agg[agg.length-1].rev||0, prev=agg[agg.length-2].rev||0; let pct=prev>0?Math.round((last-prev)/prev*100):(last>0?100:0); return {pct,last,prev}; })();
+  const growthChip=g.pct==null?`<span class="tag">— add another quarter to compare —</span>`
+    :`<span style="font-weight:800;color:${g.pct>=0?'var(--green)':'var(--red)'}">${g.pct>=0?'▲ +':'▼ '}${g.pct}%</span> <span style="color:var(--muted);font-size:12px">QoQ (${tcMoney(g.prev)}→${tcMoney(g.last)})</span>`;
+  const toggle=`<div class="filterbar" style="margin:0">
+      <button class="chip ${TC_CHART==='line'?'active':''}" onclick="TC_CHART='line';route()">📈 Line</button>
+      <button class="chip ${TC_CHART==='hbar'?'active':''}" onclick="TC_CHART='hbar';route()">▬ Horizontal Bars</button>
+    </div>`;
+  const chartBody = series.length
+    ? (TC_CHART==='hbar' ? tcHBarSVG(cols, series) : tcMultiLineSVG(cols, series))
+    : '<div class="empty" style="padding:20px">Add customers with quarterly revenue to chart growth. Each customer appears as its own line.</div>';
+  const sub = TC_CHART==='hbar'
+    ? 'One horizontal bar per customer — ranked by NSE Total and stacked by quarter so you can see each quarter\'s contribution.'
+    : 'Each customer is its own line across the quarter columns, so you can compare quarter-over-quarter growth customer by customer.';
+  return `<div class="card">
+    <div class="card-head" style="align-items:flex-start">
+      <div><h3>📈 Growth — Quarter over Quarter</h3><div style="font-size:13px;margin-top:2px">${growthChip}</div></div>
+      ${toggle}
+    </div>
+    <div class="card-sub">${sub}</div>
+    ${chartBody}
+  </div>`;
+}
+
+/* =====================================================================
+   Re-implemented Top Customer page (fixes highlight + swaps in tcGrowthCard)
+   ===================================================================== */
+window.pageCustomerOpps = function(){
+  const list0=tcList();
+  const cols=tcAllQuarterCols();
+  const search=((typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'').toLowerCase().trim();
+  let sort=(typeof COPP_SORT!=='undefined')?COPP_SORT:'total';
+  if(['total','top','name','cid'].indexOf(sort)<0) sort='total';
+  let list=list0.slice();
+  if(search) list=list.filter(c=>[c.name,c.meta.cid,c.meta.associatedIds,c.meta.nseName,c.meta.mode].join(' ').toLowerCase().includes(search));
+  if(sort==='total') list.sort((a,b)=>tcTotal(b.meta)-tcTotal(a.meta));
+  else if(sort==='top') list.sort((a,b)=>((b.meta.fav?1:0)-(a.meta.fav?1:0))||tcTotal(b.meta)-tcTotal(a.meta));
+  else if(sort==='name') list.sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sort==='cid') list.sort((a,b)=>String(a.meta.cid||'').localeCompare(String(b.meta.cid||'')));
+
+  /* KPIs */
+  const grand=list0.reduce((s,c)=>s+tcTotal(c.meta),0);
+  const tops=list0.filter(c=>c.meta.fav).length;
+  const fromFunnel=list0.filter(c=>c.meta.fromFunnel).length;
+  const kpis=`<div class="kpi-grid">
+    ${kpi('Top Customers',list0.length,'b-blue')}
+    ${kpi('NSE Total (All)',tcMoney(grand),'b-green')}
+    ${kpi('⭐ Starred',tops,'b-amber','shown on dashboard')}
+    ${kpi('From Prospect Funnel',fromFunnel,'b-navy','auto-added')}
+  </div>`;
+
+  const growthCard=tcGrowthCard();
+
+  const sortSel=`<select style="max-width:190px" onchange="COPP_SORT=this.value;route()">
+      <option value="total" ${sort==='total'?'selected':''}>Sort: NSE Total ↓</option>
+      <option value="top" ${sort==='top'?'selected':''}>Sort: Top Customers First</option>
+      <option value="name" ${sort==='name'?'selected':''}>Sort: Customer A→Z</option>
+      <option value="cid" ${sort==='cid'?'selected':''}>Sort: CID</option>
+    </select>`;
+
+  /* spreadsheet */
+  const qHeads=cols.map(c=>`<th style="text-align:right;white-space:nowrap">${esc(c)}</th>`).join('');
+  const rows=list.map(c=>{ const m=c.meta; const nm=jsq(c.name);
+    const qCells=cols.map(col=>{ const v=(m.quarters||{})[col]; return `<td style="text-align:right;white-space:nowrap;color:${v?'var(--ink)':'#c9d2dc'}">${v?tcMoney(v):''}</td>`; }).join('');
+    return `<tr class="${m.fav?'tc-top':''}" style="cursor:pointer" onclick="openCustomerDetail('${nm}')">
+      <td onclick="event.stopPropagation();toggleCustFav('${nm}')" title="${m.fav?'Remove Top Customer':'Mark as Top Customer'}" style="text-align:center;font-size:16px;color:${m.fav?'var(--accent)':'#c9d2dc'}">${m.fav?'★':'☆'}</td>
+      <td style="white-space:nowrap"><strong>${esc(c.name)}</strong>${m.fromFunnel?' <span class="pill won" title="Converted from Prospect Funnel">🎉</span>':''}</td>
+      <td style="white-space:nowrap;color:var(--muted)">${esc(m.cid||'')}</td>
+      <td style="white-space:nowrap;color:var(--muted)">${esc(m.associatedIds||'')}</td>
+      <td style="white-space:nowrap"><span class="pill type">${esc(m.mode||'OSOW')}</span></td>
+      <td style="white-space:nowrap">${esc(m.nseName||'')}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.nseStart?fmtDate(m.nseStart):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.nseEnd?fmtDate(m.nseEnd):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.closeStart?fmtDate(m.closeStart):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.closeEnd?fmtDate(m.closeEnd):'—'}</td>
+      ${qCells}
+      <td style="text-align:right;white-space:nowrap"><strong>${tcMoney(tcTotal(m))}</strong></td>
+    </tr>`;
+  }).join('');
+  const totalsRow=(function(){
+    const qTot=cols.map(col=>{ const t=list.reduce((s,c)=>s+(Number((c.meta.quarters||{})[col])||0),0); return `<td style="text-align:right;font-weight:800">${t?tcMoney(t):''}</td>`; }).join('');
+    const grandShown=list.reduce((s,c)=>s+tcTotal(c.meta),0);
+    return `<tr style="background:var(--th-bg);font-weight:800"><td></td><td>Total</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>${qTot}<td style="text-align:right">${tcMoney(grandShown)}</td></tr>`;
+  })();
+  const body = list.length ? `<div class="card">
+      <div class="card-head"><h3>Top Customers <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3>
+        <span style="font-size:12px;color:var(--muted)">Click any row to open &amp; edit the full record · ★ highlights your Top Customers</span></div>
+      <div class="table-wrap"><table style="min-width:${1080+cols.length*90}px">
+        <thead><tr><th style="width:34px">★</th><th>Customer</th><th>CID</th><th>AssociatedCustomerIDs</th><th>Mode</th><th>NSEName</th><th>NSEStart</th><th>NSEEnd</th><th>CloseStartDate</th><th>CloseEndDate</th>${qHeads}<th style="text-align:right">NSE Total</th></tr></thead>
+        <tbody>${rows}${totalsRow}</tbody>
+      </table></div></div>`
+    : `<div class="card"><div class="empty">No Top Customers yet. Click <strong>＋ Add Customer</strong> to enter one, or win a prospect in the Prospect Funnel and it lands here automatically.</div></div>`;
+
+  return `
+  <div class="page-title">🏢 Top Customer</div>
+  <div class="page-sub">Your book of Top Customers — <strong>manually entered</strong> (no longer pulled from the quote log). Track CID, mode, NSE window, close dates, and quarterly NSE revenue. Prospects won in the <strong>Prospect Funnel</strong> are added here automatically. Star up to five for the dashboard.</div>
+  ${growthCard}
+  ${kpis}
+  <div class="card" style="padding:14px 18px;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px"><label style="margin-bottom:6px">Search</label><input placeholder="Customer, CID, NSE, mode…" value="${esc((typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'')}" oninput="COPP_SEARCH=this.value;coppSearchDebounce()"></div>
+    <div><label style="margin-bottom:6px">Sort</label>${sortSel}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" style="width:auto" onclick="tcAddQuarterCol()">＋ Quarter</button>
+      <button class="btn btn-ghost" style="width:auto" onclick="tcManagerSummary()">📋 Manager Summary</button>
+      <button class="btn btn-primary" style="width:auto" onclick="openAddTopCustomer()">＋ Add Customer</button>
+    </div>
+  </div>
+  ${body}`;
+};
+
+/* expose helpers used by inline handlers / router */
+window.tcChartData=tcChartData; window.tcMultiLineSVG=tcMultiLineSVG; window.tcHBarSVG=tcHBarSVG; window.tcGrowthCard=tcGrowthCard;
+
+try{ if(typeof route==='function' && CURRENT_PAGE==='custopps') route(); }catch(e){}
+</script>
+
 </body>
 </html>
