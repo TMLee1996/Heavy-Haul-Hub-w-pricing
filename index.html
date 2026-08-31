@@ -333,6 +333,8 @@ const DB = {
       if(d.aging)localStorage.setItem('hht_aging',JSON.stringify(d.aging));
       if(d.closetracker)localStorage.setItem('hht_closetracker',JSON.stringify(d.closetracker));
       if(d.projects)localStorage.setItem('hht_projects',JSON.stringify(d.projects));
+      if(d.opps)localStorage.setItem('hht_opps',JSON.stringify(d.opps));
+      if(d.oppOffices)localStorage.setItem('hht_oppOffices',JSON.stringify(d.oppOffices));
       localStorage.setItem('hht_share_token', window.__SHARE_TOKEN__||'1');
     }
   }catch(e){}
@@ -3226,7 +3228,7 @@ function download(filename, content, type){
   const blob=new Blob([content],{type:type}); const a=document.createElement('a');
   a.href=URL.createObjectURL(blob); a.download=filename; a.click();
 }
-function snapshot(){ return {reps:DB.reps(),nses:DB.nses(),quotes:DB.quotes(),customers:DB.customers(),nsemeta:DB.nsemeta(),prospects:DB.prospects(),repprospects:DB.repprospects(),announcements:DB.announcements(),utilization:DB.utilization(),aging:DB.aging(),closetracker:DB.closetracker(),projects:DB.projects()}; }
+function snapshot(){ return {reps:DB.reps(),nses:DB.nses(),quotes:DB.quotes(),customers:DB.customers(),nsemeta:DB.nsemeta(),prospects:DB.prospects(),repprospects:DB.repprospects(),announcements:DB.announcements(),utilization:DB.utilization(),aging:DB.aging(),closetracker:DB.closetracker(),projects:DB.projects(),opps:(typeof DB.opps==='function'?DB.opps():null),oppOffices:(typeof DB.oppOffices==='function'?DB.oppOffices():null)}; }
 function exportData(){
   download('TeamVestDemo-backup-'+todayISO()+'.json', JSON.stringify(snapshot(),null,2), 'application/json');
   toast('Backup downloaded');
@@ -3240,6 +3242,7 @@ document.getElementById('importFile').addEventListener('change',function(e){
     if(d.announcements)DB.saveAnnouncements(d.announcements); if(d.utilization)DB.saveUtilization(d.utilization);
     if(d.aging)DB.saveAging(d.aging); if(d.closetracker)DB.saveCloseTracker(d.closetracker);
     if(d.projects)DB.saveProjects(d.projects);
+    if(d.opps)DB.saveOpps(d.opps); if(d.oppOffices)DB.saveOppOffices(d.oppOffices);
     route(); toast('Data restored'); }catch(err){ alert('Invalid backup file.'); } };
   r.readAsText(f); this.value='';
 });
@@ -5701,7 +5704,9 @@ function exportQuotesJSON(){
     /* --- NSE Tools datasets so the file round-trips the whole workspace --- */
     nses:DB.nses(), reps:DB.reps(), prospects:DB.prospects(), repprospects:DB.repprospects(),
     announcements:DB.announcements(), utilization:DB.utilization(), aging:DB.aging(), closetracker:DB.closetracker(),
-    nsemeta:DB.nsemeta(), customers:DB.customers(), projects:DB.projects()
+    nsemeta:DB.nsemeta(), customers:DB.customers(), projects:DB.projects(),
+    /* --- Prospect Funnel (opportunities + funnel offices) --- */
+    opps:DB.opps(), oppOffices:DB.oppOffices()
   };
   download('TeamVestDemo-export-'+todayISO()+'.json', JSON.stringify(payload,null,2), 'application/json');
   toast('JSON downloaded ('+rows.length+' quotes + NSE Tools)');
@@ -5725,6 +5730,8 @@ function extractAux(parsed){
   if(parsed.nsemeta   && typeof parsed.nsemeta==='object')   aux.nsemeta=parsed.nsemeta;
   if(parsed.customers && typeof parsed.customers==='object') aux.customers=parsed.customers;
   if(Array.isArray(parsed.projects)) aux.projects=parsed.projects;
+  if(Array.isArray(parsed.opps)) aux.opps=parsed.opps;
+  if(Array.isArray(parsed.oppOffices)) aux.oppOffices=parsed.oppOffices;
   return Object.keys(aux).length? aux : null;
 }
 function countAuxItems(aux){
@@ -5736,6 +5743,8 @@ function countAuxItems(aux){
   if(aux.nsemeta)   Object.values(aux.nsemeta).forEach(o=>{ n+=Object.keys(o||{}).length; });
   if(aux.customers) n+=Object.keys(aux.customers).length;
   if(Array.isArray(aux.projects)) n+=aux.projects.length;
+  if(Array.isArray(aux.opps)) n+=aux.opps.length;
+  if(Array.isArray(aux.oppOffices)) n+=aux.oppOffices.length;
   return n;
 }
 /* ---- Fold one file's NSE Tools data into the staging accumulator (no DB writes) ---- */
@@ -5756,6 +5765,8 @@ function mergeAuxIntoStaging(aux){
   });
   if(aux.customers) Object.assign(A.customers, aux.customers);
   (aux.projects||[]).forEach(pr=>{ if(pr && pr.id) A.projects[pr.id]=pr; });
+  (aux.opps||[]).forEach(op=>{ if(op && op.id) A.opps[op.id]=op; });
+  (aux.oppOffices||[]).forEach(off=>{ if(off) A.oppOffices[off]=true; });
 }
 function auxCounts(){
   const A=(IMPORT_PREVIEW&&IMPORT_PREVIEW.aux)||{nses:{},reps:{},prospects:{},repprospects:{},nsemeta:{},customers:{},projects:{}};
@@ -5763,12 +5774,13 @@ function auxCounts(){
   const repprospects=Object.values(A.repprospects||{}).reduce((s,o)=>s+Object.keys(o).length,0);
   const nsemeta=Object.values(A.nsemeta).reduce((s,o)=>s+Object.keys(o).length,0);
   return { nses:Object.keys(A.nses).length, reps:Object.keys(A.reps).length,
-    prospects, repprospects, nsemeta, customers:Object.keys(A.customers).length, projects:Object.keys(A.projects||{}).length };
+    prospects, repprospects, nsemeta, customers:Object.keys(A.customers).length, projects:Object.keys(A.projects||{}).length,
+    opps:Object.keys(A.opps||{}).length, oppOffices:Object.keys(A.oppOffices||{}).length };
 }
-function auxTotal(){ const c=auxCounts(); return c.nses+c.reps+c.prospects+c.repprospects+c.nsemeta+c.customers+c.projects; }
+function auxTotal(){ const c=auxCounts(); return c.nses+c.reps+c.prospects+c.repprospects+c.nsemeta+c.customers+c.projects+(c.opps||0)+(c.oppOffices||0); }
 /* ---- On approve: merge staged NSE Tools data into the DB ---- */
 function applyAuxToDB(){
-  const A=IMPORT_PREVIEW.aux; const touched={nses:0,reps:0,prospects:0,repprospects:0,nsemeta:0,customers:0,projects:0};
+  const A=IMPORT_PREVIEW.aux; const touched={nses:0,reps:0,prospects:0,repprospects:0,nsemeta:0,customers:0,projects:0,opps:0,oppOffices:0};
   /* NSE roster */
   const nses=DB.nses()||[]; const nseByU={}; nses.forEach(n=>nseByU[n.u]=n);
   Object.values(A.nses).forEach(inc=>{
@@ -5840,6 +5852,18 @@ function applyAuxToDB(){
     touched.projects++;
   });
   DB.saveProjects(projects);
+  /* Prospect Funnel opportunities — merge by id (nothing existing is dropped) */
+  const opps=DB.opps()||[]; const oppById={}; opps.forEach(x=>oppById[x.id]=x);
+  Object.values(A.opps||{}).forEach(inc=>{
+    if(oppById[inc.id]) Object.assign(oppById[inc.id], inc);
+    else { opps.push(inc); oppById[inc.id]=inc; }
+    touched.opps++;
+  });
+  DB.saveOpps(opps);
+  /* Prospect Funnel offices — union of names */
+  const offSet=new Set(DB.oppOffices()||[]);
+  Object.keys(A.oppOffices||{}).forEach(name=>{ if(!offSet.has(name)){ offSet.add(name); touched.oppOffices++; } });
+  DB.saveOppOffices(Array.from(offSet));
   return touched;
 }
 document.getElementById('importJsonFile').addEventListener('change',function(e){
@@ -5874,7 +5898,7 @@ function jsonToQuote(obj){
 /* ---- Stage all selected JSON files into IMPORT_PREVIEW (no DB writes yet) ---- */
 function stageImport(files){
   IMPORT_PREVIEW={ additions:[], updates:[], duplicates:[], files:[], errors:[],
-    aux:{ nses:{}, reps:{}, prospects:{}, repprospects:{}, nsemeta:{}, customers:{}, projects:{} } };
+    aux:{ nses:{}, reps:{}, prospects:{}, repprospects:{}, nsemeta:{}, customers:{}, projects:{}, opps:{}, oppOffices:{} } };
   const existing=DB.quotes();
   const byId={}; existing.forEach(q=>byId[q.id]=q);
   // guard against duplicate ids appearing across multiple files in one batch
@@ -6012,6 +6036,8 @@ function showImportReview(){
         ${kpi('NSE Opp Rankings',ac.nsemeta,'b-navy')}
         ${kpi('Customer Opps',ac.customers,'b-amber')}
         ${kpi('Projects',ac.projects,'b-blue')}
+        ${kpi('Funnel Opps',ac.opps,'b-green')}
+        ${kpi('Funnel Offices',ac.oppOffices,'b-orange')}
       </div>
     </div>`:''}
     ${renderMergeReport()}
@@ -6055,7 +6081,7 @@ function approveImport(){
   });
   DB.saveQuotes(quotes);
   const auxTouched=applyAuxToDB();
-  const auxSum=auxTouched.nses+auxTouched.reps+auxTouched.prospects+auxTouched.repprospects+auxTouched.nsemeta+auxTouched.customers+auxTouched.projects;
+  const auxSum=auxTouched.nses+auxTouched.reps+auxTouched.prospects+auxTouched.repprospects+auxTouched.nsemeta+auxTouched.customers+auxTouched.projects+(auxTouched.opps||0)+(auxTouched.oppOffices||0);
   IMPORT_LAST={ when:new Date().toISOString(), files:IMPORT_PREVIEW.files.slice(), added, updated, skipped, aux:auxTouched, auxSum, errors:IMPORT_PREVIEW.errors.slice() };
   localStorage.setItem('hht_lastImport', JSON.stringify(IMPORT_LAST));
   closeModal(); go('importcenter');
@@ -6073,6 +6099,7 @@ function undoLastImport(){
     if(d.announcements)DB.saveAnnouncements(d.announcements); if(d.utilization)DB.saveUtilization(d.utilization);
     if(d.aging)DB.saveAging(d.aging); if(d.closetracker)DB.saveCloseTracker(d.closetracker);
     if(d.projects)DB.saveProjects(d.projects);
+    if(d.opps)DB.saveOpps(d.opps); if(d.oppOffices)DB.saveOppOffices(d.oppOffices);
     localStorage.removeItem('hht_preImportBackup');
     IMPORT_LAST=null; localStorage.removeItem('hht_lastImport');
     route(); toast('Last import undone');
@@ -6099,7 +6126,7 @@ function pageImportCenter(){
   <div class="page-sub">Upload one or many JSON files at once. This updates your <strong>quotes</strong> and everything behind the <strong>NSE Tools</strong> tabs — NSE roster, rep claims/offices, prospect pipelines, and opportunity rankings. You'll get a merge report and review screen before anything is saved — and an Undo if you need it.</div>
   <div class="card">
     <div class="card-head"><h3>Bulk JSON Upload</h3></div>
-    <div class="card-sub">Select multiple JSON files (Charlotte, Knoxville, Dallas, etc.). A file can be an array of quote objects, an object with a <strong>quotes</strong> array, and/or carry NSE Tools datasets (<strong>nses</strong>, <strong>reps</strong>, <strong>prospects</strong>, <strong>nsemeta</strong>, <strong>customers</strong>) — a full app backup works too. Quotes match by <strong>id</strong> for updates and flag possible duplicates on customer + subject + received date; rep offices &amp; NSE claims are merged so nothing existing is lost. Nothing is written until you approve.</div>
+    <div class="card-sub">Select multiple JSON files (Charlotte, Knoxville, Dallas, etc.). A file can be an array of quote objects, an object with a <strong>quotes</strong> array, and/or carry NSE Tools datasets (<strong>nses</strong>, <strong>reps</strong>, <strong>prospects</strong>, <strong>nsemeta</strong>, <strong>customers</strong>, <strong>opps</strong>, <strong>oppOffices</strong>) — a full app backup works too. The <strong>Prospect Funnel</strong> (opportunities &amp; funnel offices) is included in backups and merged by id on import. Quotes match by <strong>id</strong> for updates and flag possible duplicates on customer + subject + received date; rep offices &amp; NSE claims are merged so nothing existing is lost. Nothing is written until you approve.</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-primary" style="width:auto" onclick="document.getElementById('importJsonFile').click()">⬆ Choose JSON</button>
       <button class="btn btn-ghost" style="width:auto" onclick="exportData()">⬇ Back Up (Download JSON)</button>
@@ -8726,5 +8753,1314 @@ if(typeof applyIdentityV2==='function'){ const _apply=applyIdentityV2;
 })();
 
 </script>
+<script>
+/* ===================================================================
+   NSE TOOLS UPGRADE v5
+   -------------------------------------------------------------------
+   1) CUSTOMER OPPORTUNITIES — full redo: clean list, Quarter-over-Quarter
+      growth line graph, click-into detail with Action-Item checklist,
+      Customer Visit Date, Notes, New Opportunities, and Top-Customer star.
+   2) NSE DASHBOARD — surfaces Top 5 Customers + Top 5 Prospects (funnel).
+   3) PROSPECT FUNNEL — "Move to Whale" category button (massive, long-close
+      opportunities), a Work-a-Tier filter bar, and an expanded Whale tier
+      that shows every qualifying + needs-assessment detail on one page.
+   All new fields ride on the existing customer/opp records, so they
+   round-trip through JSON backups & the Import Center automatically.
+   =================================================================== */
+
+/* =====================================================================
+   SMALL SHARED HELPERS
+   ===================================================================== */
+function v5CustMeta(name){ const c=DB.customers()||{}; return c[name]||{}; }
+function v5CustSet(name, patch){
+  const c=DB.customers()||{}; c[name]=Object.assign({}, c[name], patch); DB.saveCustomers(c);
+}
+function v5QKey(iso){ if(!iso) return null; const d=new Date(iso+'T00:00:00'); if(isNaN(d)) return null; return d.getFullYear()+' Q'+(Math.floor(d.getMonth()/3)+1); }
+function v5QCmp(a,b){ const pa=a.split(' Q'), pb=b.split(' Q'); return (+pa[0]*10 + +pa[1])-(+pb[0]*10 + +pb[1]); }
+function v5QShort(k){ const p=k.split(' Q'); return 'Q'+p[1]+" '"+p[0].slice(2); }
+
+/* Quarter-over-quarter buckets from the quote log (optionally scoped to
+   one customer and/or the current COPP office filter). */
+function v5QuarterSeries(customerName){
+  const off=(typeof COPP_OFF!=='undefined')?COPP_OFF:'all';
+  const buckets={};
+  (DB.quotes()||[]).forEach(q=>{
+    if(customerName && ((q.customerName||'(Unknown)').trim())!==customerName) return;
+    if(off && off!=='all' && (q.office||'')!==off) return;
+    const k=v5QKey(q.dateReceived); if(!k) return;
+    if(!buckets[k]) buckets[k]={quotes:0,ships:0,won:0};
+    buckets[k].quotes++;
+    quoteItems(q).forEach(it=>buckets[k].ships+=itemVol(it));
+    if(q.status==='Won') buckets[k].won++;
+  });
+  const keys=Object.keys(buckets).sort(v5QCmp).slice(-8);
+  return keys.map(k=>({label:v5QShort(k), full:k, ships:buckets[k].ships, quotes:buckets[k].quotes, won:buckets[k].won}));
+}
+
+/* Clean SVG line chart (with soft area fill, gridlines, value labels). */
+function v5LineSVG(series, valKey, opts){
+  opts=opts||{};
+  const W=opts.w||760, H=opts.h||210, pad={l:46,r:18,t:18,b:34};
+  if(!series || !series.length) return '<div class="empty" style="padding:22px">No dated quotes yet to chart growth.</div>';
+  const vals=series.map(s=>s[valKey]||0);
+  const max=Math.max(1,...vals);
+  const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b, n=series.length;
+  const X=i=> pad.l + (n===1? iw/2 : (iw*i/(n-1)));
+  const Y=val=> pad.t + ih - (ih*val/max);
+  const pts=series.map((s,i)=>[X(i),Y(s[valKey]||0)]);
+  const line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area='M'+pts[0][0].toFixed(1)+' '+(pad.t+ih).toFixed(1)+' '+pts.map(p=>'L'+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ')+' L'+pts[n-1][0].toFixed(1)+' '+(pad.t+ih).toFixed(1)+' Z';
+  let grid='';
+  for(let g=0;g<=4;g++){ const gv=max*g/4, gy=Y(gv);
+    grid+=`<line x1="${pad.l}" y1="${gy.toFixed(1)}" x2="${W-pad.r}" y2="${gy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
+        +`<text x="${pad.l-7}" y="${(gy+3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)">${Math.round(gv)}</text>`;
+  }
+  const dots=pts.map((p,i)=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.6" fill="var(--accent2)"/>`
+        +`<text x="${p[0].toFixed(1)}" y="${(p[1]-8).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${series[i][valKey]||0}</text>`).join('');
+  const xlab=series.map((s,i)=>`<text x="${X(i).toFixed(1)}" y="${H-12}" text-anchor="middle" font-size="10" fill="var(--muted)">${esc(s.label)}</text>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:230px" preserveAspectRatio="xMidYMid meet">
+    ${grid}
+    <path d="${area}" fill="rgba(19,64,116,.10)" stroke="none"/>
+    <path d="${line}" fill="none" stroke="var(--accent2)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${xlab}
+  </svg>`;
+}
+
+/* Growth stat between the last two quarters. */
+function v5GrowthStat(series, key){
+  key=key||'ships';
+  if(!series || series.length<2) return {pct:null, dir:'flat', last:series&&series.length?series[series.length-1][key]:0, prev:0};
+  const last=series[series.length-1][key]||0, prev=series[series.length-2][key]||0;
+  let pct=null; if(prev>0) pct=Math.round(((last-prev)/prev)*100); else if(last>0) pct=100;
+  const dir = pct==null?'flat': pct>0?'up': pct<0?'down':'flat';
+  return {pct, dir, last, prev};
+}
+function v5GrowthChip(g){
+  if(g.pct==null) return `<span class="tag">— no prior quarter —</span>`;
+  const col=g.dir==='up'?'var(--green)':g.dir==='down'?'var(--red)':'var(--muted)';
+  const arr=g.dir==='up'?'▲':g.dir==='down'?'▼':'▬';
+  return `<span style="font-weight:800;color:${col}">${arr} ${g.pct>0?'+':''}${g.pct}%</span> <span style="color:var(--muted);font-size:12px">QoQ (${g.prev}→${g.last} shp)</span>`;
+}
+
+/* =====================================================================
+   1) CUSTOMER OPPORTUNITIES — FULL REDESIGN
+   ===================================================================== */
+function v5CustList(){
+  let data=buildCustomerData(null,'overall');
+  data.forEach(c=>{ c._office=coppCustomerOffice(c.name); c._last=coppLastActivity(c.name); c._meta=v5CustMeta(c.name); c._fromFunnel=!!(c._meta.fromFunnel); });
+  const off=(typeof COPP_OFF!=='undefined')?COPP_OFF:'all';
+  let list=data.slice();
+  if(off!=='all') list=list.filter(c=>c._office===off);
+  const q=((typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'').toLowerCase().trim();
+  if(q) list=list.filter(c=>[c.name,c.topType,c._office,c.desc].join(' ').toLowerCase().includes(q));
+  const sort=(typeof COPP_SORT!=='undefined')?COPP_SORT:'quotes';
+  if(sort==='quotes') list.sort((a,b)=>b.total-a.total);
+  else if(sort==='win') list.sort((a,b)=>b.winPct-a.winPct);
+  else if(sort==='ship') list.sort((a,b)=>b.shipments-a.shipments);
+  else if(sort==='vol') list.sort((a,b)=>b.weightLbs-a.weightLbs);
+  else if(sort==='recent') list.sort((a,b)=>(b._last||'').localeCompare(a._last||''));
+  else if(sort==='name') list.sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sort==='top') list.sort((a,b)=>(b.fav?1:0)-(a.fav?1:0)||b.total-a.total);
+  return {data, list, offs:[...new Set(data.map(c=>c._office).filter(Boolean))].sort((a,b)=>a.localeCompare(b))};
+}
+
+function v5ActionProgress(meta){
+  const a=(meta.actionItems||[]); const done=a.filter(x=>x.done).length; return {done, total:a.length};
+}
+
+window.pageCustomerOpps = function(){
+  const off=(typeof COPP_OFF!=='undefined')?COPP_OFF:'all';
+  const {data, list, offs}=v5CustList();
+  if(off!=='all' && !offs.includes(off) && typeof COPP_OFF!=='undefined') COPP_OFF='all';
+
+  /* KPIs */
+  const totalQuotes=data.reduce((s,c)=>s+c.total,0);
+  const totalShip=data.reduce((s,c)=>s+c.shipments,0);
+  const wins=data.reduce((s,c)=>s+c.won,0);
+  const tops=data.filter(c=>c.fav).length;
+  const converted=data.filter(c=>c._fromFunnel).length;
+  const kpis=`<div class="kpi-grid">
+    ${kpi('Customers',data.length,'b-blue')}
+    ${kpi('Total Quotes',totalQuotes,'b-navy')}
+    ${kpi('Total Shipments',totalShip,'b-orange')}
+    ${kpi('Quotes Won',wins,'b-green')}
+    ${kpi('⭐ Top Customers',tops+'/5','b-amber','starred')}
+  </div>`;
+
+  /* QoQ growth chart (scoped to the office filter) */
+  const series=v5QuarterSeries(null);
+  const g=v5GrowthStat(series,'ships');
+  const growthCard=`<div class="card">
+    <div class="card-head"><h3>📈 Growth — Quarter over Quarter${off!=='all'?(' · '+esc(off)):''}</h3>
+      <span style="font-size:13px">${v5GrowthChip(g)}</span></div>
+    <div class="card-sub">Total shipment volume booked each quarter across ${off==='all'?'all offices':esc(off)}. Hover the points for the per-quarter totals.</div>
+    ${v5LineSVG(series,'ships')}
+  </div>`;
+
+  /* Controls */
+  const offSel=`<select style="max-width:220px" onchange="COPP_OFF=this.value;route()">
+      <option value="all" ${off==='all'?'selected':''}>🏢 All Offices</option>
+      ${offs.map(o=>`<option ${off===o?'selected':''}>${esc(o)}</option>`).join('')}
+    </select>`;
+  const sort=(typeof COPP_SORT!=='undefined')?COPP_SORT:'quotes';
+  const sortSel=`<select style="max-width:200px" onchange="COPP_SORT=this.value;route()">
+      <option value="quotes" ${sort==='quotes'?'selected':''}>Sort: Most Quotes</option>
+      <option value="top" ${sort==='top'?'selected':''}>Sort: Top Customers First</option>
+      <option value="ship" ${sort==='ship'?'selected':''}>Sort: Shipments</option>
+      <option value="win" ${sort==='win'?'selected':''}>Sort: Win %</option>
+      <option value="vol" ${sort==='vol'?'selected':''}>Sort: Volume (lbs)</option>
+      <option value="recent" ${sort==='recent'?'selected':''}>Sort: Most Recent</option>
+      <option value="name" ${sort==='name'?'selected':''}>Sort: Name A→Z</option>
+    </select>`;
+  const search=(typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'';
+
+  /* Clean list */
+  let body;
+  if(!list.length){ body=`<div class="card"><div class="empty">No customers yet. Customers appear here automatically as reps log quotes — or when a prospect is won in the funnel.</div></div>`; }
+  else {
+    const rows=list.map(c=>{ const nm=jsq(c.name); const ap=v5ActionProgress(c._meta);
+      const visit=c._meta.visitDate;
+      const apChip = ap.total? `<span class="pill ${ap.done===ap.total?'won':'pending'}" title="Action items complete">${ap.done}/${ap.total} ✓</span>` : '<span style="color:var(--muted);font-size:12px">—</span>';
+      return `<tr style="cursor:pointer;${c.fav?'background:#fff8ec':''}" onclick="openCustomerDetail('${nm}')">
+        <td onclick="event.stopPropagation();toggleCustFav('${nm}')" title="${c.fav?'Remove Top Customer':'Mark as Top Customer'}" style="text-align:center;font-size:17px;color:${c.fav?'var(--accent)':'#c9d2dc'}">${c.fav?'★':'☆'}</td>
+        <td><strong>${esc(c.name)}</strong>${c._fromFunnel?' <span class="pill won" title="Converted from Prospect Funnel">🎉 From Funnel</span>':''}<div style="font-size:11px;color:var(--muted)">Top type: ${esc(c.topType)} · ${c.laneCount} lane(s)</div></td>
+        <td>${c._office?`<span class="pill type">${esc(c._office)}</span>`:'—'}</td>
+        <td style="text-align:center"><strong>${c.total}</strong></td>
+        <td style="text-align:center">${c.shipments}</td>
+        <td style="text-align:center"><strong>${c.winPct}%</strong></td>
+        <td style="text-align:right">${(c.weightLbs).toLocaleString()} lbs</td>
+        <td style="white-space:nowrap;text-align:center;font-size:12px;color:${visit?'var(--ink)':'var(--muted)'}">${visit?fmtDate(visit):'—'}</td>
+        <td style="text-align:center">${apChip}</td>
+        <td style="white-space:nowrap"><button class="rowbtn" onclick="event.stopPropagation();openCustomerDetail('${nm}')">👁️ Open</button></td>
+      </tr>`;
+    }).join('');
+    body=`<div class="card">
+      <div class="card-head"><h3>All Customers <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3>
+        <span style="font-size:12px;color:var(--muted)">Click any row to open the full record</span></div>
+      <div class="table-wrap"><table style="min-width:980px">
+        <thead><tr><th style="width:38px">★</th><th>Customer</th><th>Office</th><th style="text-align:center">Quotes</th><th style="text-align:center">Ship</th><th style="text-align:center">Win %</th><th style="text-align:right">Volume</th><th style="text-align:center">Visit</th><th style="text-align:center">Actions</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div></div>`;
+  }
+
+  return coppTopPanel() + `
+  <div class="page-title">🏢 Customer Opportunities</div>
+  <div class="page-sub">A clean roll-up of every customer from the quote log. Track growth quarter over quarter, then click into any customer for their action items, visit date, notes and new opportunities. Star up to five as <strong>Top Customers</strong>.</div>
+  ${growthCard}
+  ${kpis}
+  <div class="card" style="padding:14px 18px;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+    <div><label style="margin-bottom:6px">Office</label>${offSel}</div>
+    <div style="flex:1;min-width:180px"><label style="margin-bottom:6px">Search</label><input placeholder="Customer, type, office…" value="${esc(search)}" oninput="COPP_SEARCH=this.value;coppSearchDebounce()"></div>
+    <div><label style="margin-bottom:6px">Sort</label>${sortSel}</div>
+  </div>
+  ${body}`;
+};
+
+/* ---------- Customer detail drawer ---------- */
+function openCustomerDetail(name){
+  const data=buildCustomerData(null,'overall').find(c=>c.name===name) || {name, total:0,won:0,shipments:0,weightLbs:0,winPct:0,laneCount:0,topType:'—'};
+  const meta=v5CustMeta(name);
+  const office=coppCustomerOffice(name), last=coppLastActivity(name);
+  const fromFunnel=!!meta.fromFunnel;
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('wide'); modal.classList.add('xwide');
+
+  /* per-customer QoQ */
+  const series=v5QuarterSeries(name);
+  const g=v5GrowthStat(series,'ships');
+
+  /* action items */
+  const acts=(meta.actionItems||[]);
+  const actList = acts.length ? acts.map((a,i)=>`<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--card)">
+      <input type="checkbox" style="width:auto" ${a.done?'checked':''} onchange="custToggleAction('${jsq(name)}',${i},this.checked)">
+      <span style="flex:1;font-size:13px;${a.done?'text-decoration:line-through;color:var(--muted)':''}">${esc(a.text)}</span>
+      <button class="rowbtn del" onclick="custDelAction('${jsq(name)}',${i})">✕</button>
+    </label>`).join('') : `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">No action items yet.</div>`;
+  const actDone=acts.filter(a=>a.done).length;
+
+  /* new opportunities */
+  const nops=(meta.newOpps||[]);
+  const nopList = nops.length ? nops.map((o,i)=>`<div class="note-item"><div class="meta"><span>🕒 ${fmtDateTime(o.ts)}</span><button class="note-del" onclick="custDelNewOpp('${jsq(name)}',${i})">Delete</button></div><div class="body">${esc(o.text)}</div></div>`).join('') : `<div style="font-size:12px;color:var(--muted)">No new opportunities logged yet.</div>`;
+
+  /* notes */
+  const notes=(meta.notes||[]).slice().reverse();
+  const noteList = notes.length ? notes.map((n,ri)=>{ const realIdx=(meta.notes.length-1)-ri;
+      return `<div class="note-item"><div class="meta"><span>🕒 ${fmtDateTime(n.ts)}</span><button class="note-del" onclick="custDelNote('${jsq(name)}',${realIdx})">Delete</button></div><div class="body">${esc(n.text)}</div></div>`;
+    }).join('') : `<div style="font-size:12px;color:var(--muted)">No notes yet.</div>`;
+
+  const stat=(lbl,val)=>`<div style="text-align:center;min-width:78px"><div style="font-size:19px;font-weight:800;color:var(--ink)">${val}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${lbl}</div></div>`;
+  const sec=(t)=>`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:8px">${t}</div>`;
+
+  box.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div><h3 style="margin:0">🏢 ${esc(name)}</h3>
+        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          ${office?`<span class="tag">${esc(office)}</span>`:''}
+          <span class="tag">Top type: ${esc(data.topType||'—')}</span>
+          ${fromFunnel?'<span class="pill won">🎉 From Prospect Funnel</span>':''}
+          <span style="font-size:12px;color:var(--muted)">Last activity: ${fmtDate(last)}</span>
+        </div>
+      </div>
+      <button class="btn ${meta.fav?'btn-primary':'btn-ghost'}" style="width:auto;white-space:nowrap" onclick="toggleCustFav('${jsq(name)}');openCustomerDetail('${jsq(name)}')">${meta.fav?'★ Top Customer':'☆ Mark Top Customer'}</button>
+    </div>
+
+    <div class="card" style="margin:14px 0 0;padding:12px 16px;display:flex;gap:18px;flex-wrap:wrap;justify-content:space-around">
+      ${stat('Quotes',data.total)}${stat('Shipments',data.shipments)}${stat('Won',data.won)}${stat('Win %',data.winPct+'%')}${stat('Volume',(data.weightLbs||0).toLocaleString())}${stat('Lanes',data.laneCount||0)}
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('📈 Growth — Quarter over Quarter '+v5GrowthChip(g))}
+      ${v5LineSVG(series,'ships',{w:1080,h:190})}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:16px">
+      <div class="dsec">
+        ${sec('✅ Action Item Checklist '+(acts.length?('· '+actDone+'/'+acts.length):''))}
+        ${actList}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input id="custActInput" placeholder="Add an action item…" onkeydown="if(event.key==='Enter')custAddAction('${jsq(name)}')">
+          <button class="btn btn-primary" style="width:auto" onclick="custAddAction('${jsq(name)}')">＋ Add</button>
+        </div>
+      </div>
+      <div class="dsec">
+        ${sec('📅 Customer Visit Date')}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="custVisitInput" type="date" style="max-width:200px" value="${esc(meta.visitDate||'')}" onchange="custSetVisit('${jsq(name)}',this.value)">
+          ${meta.visitDate?`<span class="tag">${fmtDate(meta.visitDate)}</span><button class="rowbtn" onclick="custSetVisit('${jsq(name)}','')">Clear</button>`:'<span style="font-size:12px;color:var(--muted)">No visit scheduled</span>'}
+        </div>
+        ${sec('💡 New Opportunities')}
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="custOppInput" placeholder="e.g. New lane / added service…" onkeydown="if(event.key==='Enter')custAddNewOpp('${jsq(name)}')">
+          <button class="btn btn-primary" style="width:auto" onclick="custAddNewOpp('${jsq(name)}')">＋ Add</button>
+        </div>
+        <div class="note-list" style="max-height:180px">${nopList}</div>
+      </div>
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('📝 Notes')}
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <textarea id="custNoteInput" style="flex:1;min-height:52px" placeholder="Add an update on this customer…"></textarea>
+        <button class="btn btn-primary" style="width:auto" onclick="custAddNote('${jsq(name)}')">＋ Add</button>
+      </div>
+      <div class="note-list">${noteList}</div>
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('🗒️ Description')}
+      <textarea id="custDescInput" style="width:100%;min-height:60px" placeholder="Short description / relationship summary…" onblur="custSaveDesc('${jsq(name)}',this.value)">${esc(meta.desc||'')}</textarea>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>
+      <button class="btn btn-ghost del" style="width:auto;background:#fdeaea;color:var(--red)" onclick="deleteCustomer('${jsq(name)}')">🗑️ Delete Customer</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+
+/* mutators */
+function custSetVisit(name, date){ v5CustSet(name,{visitDate:date||''}); openCustomerDetail(name); route(); toast(date?('Visit set for '+fmtDate(date)):'Visit date cleared'); }
+function custAddAction(name){
+  const el=document.getElementById('custActInput'); const t=el?el.value.trim():''; if(!t){ toast('Type an action item first'); return; }
+  const m=v5CustMeta(name); const a=(m.actionItems||[]).slice(); a.push({text:t,done:false,ts:new Date().toISOString()});
+  v5CustSet(name,{actionItems:a}); openCustomerDetail(name); route(); toast('Action item added');
+}
+function custToggleAction(name, idx, checked){
+  const m=v5CustMeta(name); const a=(m.actionItems||[]).slice(); if(!a[idx]) return; a[idx]=Object.assign({},a[idx],{done:checked});
+  v5CustSet(name,{actionItems:a}); openCustomerDetail(name); route();
+}
+function custDelAction(name, idx){
+  const m=v5CustMeta(name); const a=(m.actionItems||[]).slice(); a.splice(idx,1);
+  v5CustSet(name,{actionItems:a}); openCustomerDetail(name); route(); toast('Action item removed');
+}
+function custAddNewOpp(name){
+  const el=document.getElementById('custOppInput'); const t=el?el.value.trim():''; if(!t){ toast('Describe the opportunity first'); return; }
+  const m=v5CustMeta(name); const a=(m.newOpps||[]).slice(); a.push({text:t,ts:new Date().toISOString()});
+  v5CustSet(name,{newOpps:a}); openCustomerDetail(name); route(); toast('New opportunity logged');
+}
+function custDelNewOpp(name, idx){
+  const m=v5CustMeta(name); const a=(m.newOpps||[]).slice(); a.splice(idx,1);
+  v5CustSet(name,{newOpps:a}); openCustomerDetail(name); route(); toast('Opportunity removed');
+}
+function custAddNote(name){
+  const el=document.getElementById('custNoteInput'); const t=el?el.value.trim():''; if(!t){ toast('Type a note first'); return; }
+  const m=v5CustMeta(name); const a=(m.notes||[]).slice(); a.push({ts:new Date().toISOString(), text:t});
+  v5CustSet(name,{notes:a}); openCustomerDetail(name); route(); toast('Note added');
+}
+function custDelNote(name, idx){
+  const m=v5CustMeta(name); const a=(m.notes||[]).slice(); a.splice(idx,1);
+  v5CustSet(name,{notes:a}); openCustomerDetail(name); route(); toast('Note deleted');
+}
+function custSaveDesc(name, desc){ v5CustSet(name,{desc:desc}); toast('Description saved'); }
+
+/* =====================================================================
+   2) NSE DASHBOARD — inject Top 5 Customers + Top 5 Funnel Prospects
+   ===================================================================== */
+if(typeof window.pageNseDash==='function'){
+  const _pndTop5=window.pageNseDash;
+  window.pageNseDash=function(){
+    let html=_pndTop5();
+    const inject=`
+      <div class="card" style="border-left:4px solid var(--accent)">
+        <div class="card-head"><h3>⭐ Funnel Top 5 — Customers &amp; Prospects</h3></div>
+        <div class="card-sub">The five starred <strong>Top Customers</strong> and the five starred <strong>Top Prospects</strong> from the Prospect Funnel. Star them on Customer Opportunities and the Prospect Funnel, or use each panel's <em>Suggest Top 5</em>.</div>
+      </div>
+      ${coppTopPanel()}
+      ${funnelTopPanel()}`;
+    if(html.indexOf('<div class="parse-grid">')>=0){
+      return html.replace('<div class="parse-grid">', inject+'<div class="parse-grid">');
+    }
+    return html+inject;
+  };
+}
+
+/* =====================================================================
+   3) PROSPECT FUNNEL — WHALE CATEGORY + WORK-A-TIER FILTER + WHALE VIEW
+   ===================================================================== */
+/* --- move to / from whale --- */
+function oppToggleWhale(id){
+  const arr=oppList(); const o=arr.find(x=>x.id===id); if(!o) return;
+  o.whale=!o.whale; oppSave(arr);
+  if(typeof OPP_DETAIL!=='undefined' && OPP_DETAIL===id) openOppDetail(id);
+  route(); toast(o.whale?'🐋 Moved to the Whale category':'Removed from Whales');
+}
+
+/* --- extend the stage filter to understand "whale" --- */
+const _oppFilteredV5 = window.oppFiltered;
+window.oppFiltered = function(){
+  if(typeof OPP_STAGE_FILTER!=='undefined' && OPP_STAGE_FILTER==='whale'){
+    let list=oppFilteredNoStage();
+    return list.filter(o=>o.whale);
+  }
+  return _oppFilteredV5();
+};
+
+/* --- add a 🐋 button + ribbon to each board card --- */
+const _funnelCardV5 = window.funnelCard;
+window.funnelCard = function(o,f){
+  let h=_funnelCardV5(o,f);
+  const wbtn=`<button class="rowbtn" style="background:${o.whale?'#0b5cad':'#eaf2fb'};color:${o.whale?'#fff':'#0b5cad'};font-weight:700" onclick="event.stopPropagation();oppToggleWhale('${o.id}')" title="${o.whale?'Remove from Whales':'Move to Whale category (massive, long-close opp)'}">🐋 ${o.whale?'Whale':'Whale'}</button>`;
+  const editAnchor=`<button class="rowbtn" onclick="event.stopPropagation();openOppForm('${o.id}')">Edit</button>`;
+  if(h.indexOf(editAnchor)>=0) h=h.replace(editAnchor, wbtn+editAnchor);
+  if(o.whale){
+    const openAnchor=`onclick="openOppDetail('${o.id}')">`;
+    h=h.replace(openAnchor, openAnchor+`<div style="display:inline-block;background:#0b5cad;color:#fff;font-size:10px;font-weight:800;letter-spacing:.05em;padding:2px 8px;border-radius:10px;margin-bottom:6px">🐋 WHALE</div>`);
+    h=h.replace('class="card" style="margin:0 0 10px;padding:11px 12px;cursor:pointer;', 'class="card" style="margin:0 0 10px;padding:11px 12px;cursor:pointer;box-shadow:0 0 0 2px #0b5cad;');
+  }
+  return h;
+};
+
+/* --- add a Whale toggle to the opportunity detail modal --- */
+const _oppExtrasV5 = window.oppExtrasHTML;
+window.oppExtrasHTML = function(o){
+  let base=_oppExtrasV5(o);
+  const block=`<div class="dsec" style="margin-top:14px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:6px">🐋 Whale Category ${o.whale?'<span class="pill" style="background:#0b5cad;color:#fff">Whale</span>':''}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Whales are massive opportunities that can take a while to close. Flagging keeps this prospect on the dedicated <strong>Whale tier</strong> with every qualifying &amp; needs-assessment detail expanded on one page.</div>
+      <button class="btn ${o.whale?'btn-primary':'btn-ghost'}" style="width:auto" onclick="oppToggleWhale('${o.id}')">${o.whale?'🐋 Whale — click to remove':'🐋 Move to Whale Category'}</button>
+    </div>`;
+  return base+block;
+};
+
+/* --- the Work-a-Tier segmented filter bar --- */
+function funnelTierBar(){
+  const whales=oppList().filter(o=>o.whale).length;
+  const cur=(typeof OPP_STAGE_FILTER!=='undefined')?OPP_STAGE_FILTER:'all';
+  const btn=(key,label,extra,color)=>`<button class="chip ${cur===key?'active':''}" style="${cur===key&&color?('background:'+color+';border-color:'+color+';color:#fff'):''}" onclick="OPP_STAGE_FILTER='${key}';route()">${label}${extra||''}</button>`;
+  return `<div class="card" style="padding:12px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:9px">Work a Tier — focus the funnel on one tier at a time</div>
+    <div class="filterbar" style="margin:0;flex-wrap:wrap;gap:8px">
+      ${btn('all','▦ All Tiers (Board)')}
+      ${FUNNEL.map(f=>btn(f.key, f.label, '', f.color)).join('')}
+      ${btn('whale','🐋 Whales', whales?` <span class="age-badge" style="background:#0b5cad">${whales}</span>`:'', '#0b5cad')}
+    </div>
+  </div>`;
+}
+
+/* --- the expanded Whale tier: every qualifying + needs-assessment detail on one page --- */
+function whaleQualCard(o){
+  const st=oppStage(o); const f=FUNNEL_MAP[st];
+  const row=(k,val)=>val?`<div style="display:grid;grid-template-columns:150px 1fr;gap:4px 12px;font-size:13px;margin-top:5px"><div style="color:var(--muted);font-weight:600">${k}</div><div style="line-height:1.5">${esc(val)}</div></div>`:'';
+  const block=(t,val)=>val?`<div style="margin-top:10px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;border-bottom:1px solid var(--line);padding-bottom:3px;margin-bottom:4px">${t}</div><div style="font-size:13px;line-height:1.55">${esc(val)}</div></div>`:'';
+  /* progress checkboxes */
+  const prog=`<div style="display:flex;gap:16px;flex-wrap:wrap;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px 13px;margin-top:10px">
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600"><input type="checkbox" ${o.brokerContacted?'checked':''} onchange="oppToggle('${o.id}','brokerContacted',this.checked)"> Broker Contacted</label>
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600"><input type="checkbox" ${o.nseConversation?'checked':''} onchange="oppToggle('${o.id}','nseConversation',this.checked)"> NSE Conversation</label>
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600"><input type="checkbox" ${o.readyToQuote?'checked':''} onchange="oppToggle('${o.id}','readyToQuote',this.checked)"> Ready to Quote</label>
+    </div>`;
+  /* needs assessment / intake */
+  let intake='';
+  if(o.intake){
+    const I=o.intake; const steps=(I.steps||[]);
+    const stepList=steps.length? steps.map((s,i)=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:5px"><input type="checkbox" ${s.done?'checked':''} onchange="oppToggleStep('${o.id}',${i},this.checked)"><span style="${s.done?'text-decoration:line-through;color:var(--muted)':''}">${esc(s.text)}</span></label>`).join('') : '<div style="font-size:12px;color:var(--muted)">No next steps yet.</div>';
+    intake=`<div style="margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:11px 13px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:6px">🧾 Qualifying / Needs Assessment</div>
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:5px 12px;font-size:13px">
+        ${oppVolumeText(I)?`<div style="color:var(--muted);font-weight:600">Volume</div><div><strong>${esc(oppVolumeText(I))}</strong></div>`:''}
+        ${(I.modes&&I.modes.length)?`<div style="color:var(--muted);font-weight:600">Modes Needed</div><div>${I.modes.map(m=>`<span class="tag">${esc(m)}</span>`).join(' ')}</div>`:''}
+        ${(I.needs&&I.needs.length)?`<div style="color:var(--muted);font-weight:600">Needs Assessment</div><div>${I.needs.map(n=>esc(n)).join(', ')}</div>`:''}
+      </div>
+      <div style="margin-top:8px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:4px">Next Steps — check all to move to Customer</div>${stepList}
+    </div>`;
+  } else {
+    intake=`<div style="margin-top:12px;font-size:12px;color:var(--muted)">No qualifying / needs-assessment captured yet. <button class="rowbtn" onclick="openOppIntake('${o.id}')">🧾 Enter Quoting Info</button></div>`;
+  }
+  const notes=(o.notesLog||[]);
+  const notesHtml = notes.length? `<div style="margin-top:12px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:5px">📝 Notes (${notes.length})</div>${notes.slice().reverse().map(n=>`<div class="note-item"><div class="meta"><span>🕒 ${fmtDateTime(n.ts)}</span></div><div class="body">${esc(n.text)}</div></div>`).join('')}</div>` : '';
+
+  return `<div class="card" style="border-left:5px solid #0b5cad">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="display:inline-block;background:#0b5cad;color:#fff;font-size:10px;font-weight:800;letter-spacing:.05em;padding:2px 9px;border-radius:10px;margin-bottom:5px">🐋 WHALE</div>
+        <h3 style="margin:0">${esc(o.company)}</h3>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(o.broker||'—')}${o.office?(' · '+esc(o.office)):''}${o.industry?(' · '+esc(o.industry)):''}</div>
+      </div>
+      <div style="text-align:right;white-space:nowrap">
+        <span class="pill" style="background:${f.color};color:#fff">${f.label}</span>
+        <span style="font-weight:800;color:${o.likelihood>=9?'var(--green)':'var(--accent)'};margin-left:6px">${esc(o.likelihood||'—')}/10</span>
+        <span class="tag" style="margin-left:6px">${esc(o.tier||'')}</span>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:12px">
+      <div>
+        ${row('Equipment / Fit',o.equipment)}
+        ${row('HH / OD-OW Presence',o.presence)}
+        ${block('Why — Rationale',o.why)}
+        ${block('Relevant Fact',o.fact)}
+        ${block('Discovery Question',o.question)}
+        ${block('Notes',o.notes)}
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:2px">Progress — advances the funnel</div>
+        ${prog}
+        ${intake}
+        ${notesHtml}
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="rowbtn" onclick="openOppDetail('${o.id}')">👁️ Open Full Record</button>
+      <button class="rowbtn" onclick="openOppForm('${o.id}')">✏️ Edit</button>
+      <button class="rowbtn" onclick="openOppIntake('${o.id}')">🧾 Qualifying Info</button>
+      ${st==='quoting'?`<button class="rowbtn" style="background:#e3f6e9;color:var(--green)" onclick="oppMarkWon('${o.id}')">🎉 Won → Customer</button>`:''}
+      <button class="rowbtn" style="background:#eaf2fb;color:#0b5cad" onclick="oppToggleWhale('${o.id}')">🐋 Remove from Whales</button>
+    </div>
+  </div>`;
+}
+function whaleExpandedPage(){
+  const list=oppFiltered().slice().sort((a,b)=>(+b.likelihood||0)-(+a.likelihood||0)||String(a.company).localeCompare(b.company));
+  const totalLike=list.reduce((s,o)=>s+(+o.likelihood||0),0);
+  const avg=list.length?(totalLike/list.length).toFixed(1):'—';
+  const header=`<div class="card" style="border-top:4px solid #0b5cad">
+    <div class="card-head"><h3>🐋 Whale Tier — Expanded View <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3>
+      <span class="tag" style="background:#0b5cad;color:#fff">Avg likelihood ${avg}/10</span></div>
+    <div class="card-sub">Massive opportunities that can take a while to close. Every whale shows its full qualifying &amp; needs-assessment detail on one page so nothing gets lost on the long road to close.</div>
+  </div>`;
+  const body=list.length? list.map(whaleQualCard).join('') : `<div class="card"><div class="empty">No whales yet. Open any prospect and choose <strong>🐋 Move to Whale Category</strong>, or use the 🐋 button on a funnel card.</div></div>`;
+  return header+body;
+}
+
+/* --- wrap the funnel page: add the tier bar, and render the whale view --- */
+const _pageFunnelV5 = window.pageFunnel;
+window.pageFunnel = function(){
+  if(typeof OPP_STAGE_FILTER!=='undefined' && OPP_STAGE_FILTER==='whale'){
+    return oppRemindersBanner() + `<div class="page-title">🧲 Prospect Funnel</div>
+      <div class="page-sub">Whale tier — the biggest, longest-horizon opportunities, fully expanded.</div>
+      ${funnelTierBar()}
+      ${whaleExpandedPage()}`;
+  }
+  let html=_pageFunnelV5();
+  const anchor='Mark up to 5 <strong>Top Opps</strong>.</div>';
+  if(html.indexOf(anchor)>=0){ html=html.replace(anchor, anchor+funnelTierBar()); }
+  else { html=html.replace('</div>', '</div>'+funnelTierBar()); }
+  return html;
+};
+
+/* expose everything the inline handlers call */
+window.oppToggleWhale=oppToggleWhale;
+window.openCustomerDetail=openCustomerDetail;
+window.custSetVisit=custSetVisit; window.custAddAction=custAddAction; window.custToggleAction=custToggleAction; window.custDelAction=custDelAction;
+window.custAddNewOpp=custAddNewOpp; window.custDelNewOpp=custDelNewOpp; window.custAddNote=custAddNote; window.custDelNote=custDelNote; window.custSaveDesc=custSaveDesc;
+window.funnelTierBar=funnelTierBar; window.whaleExpandedPage=whaleExpandedPage;
+
+/* refresh if a page is already open */
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+
+<script>
+/* ===================================================================
+   NSE TOOLS UPGRADE v6
+   -------------------------------------------------------------------
+   1) DASHBOARD: combine the two prospect panels into ONE; rename the
+      customer panel to "Top Customer".
+   2) CUSTOMER OPPORTUNITIES  ->  "Top Customer" — a manually-entered
+      spreadsheet modeled on the reference grid (Customer, CID,
+      AssociatedCustomerIDs, Mode, NSEName, NSEStart, NSEEnd,
+      CloseStartDate, CloseEndDate, quarterly $ columns, NSE Total).
+      No longer pulls from the quote log. Prospects won in the funnel
+      are added here automatically.
+   3) MANAGER SUMMARY for the Top 5 Customers + Top Prospects, styled
+      like the Office Summary Report, with an optional Group-by-Tier.
+   All data rides on DB.customers()/DB.opps() so it round-trips through
+   JSON backups and the Import Center automatically.
+   =================================================================== */
+
+/* =====================================================================
+   SHARED TOP-CUSTOMER HELPERS
+   ===================================================================== */
+function tcDefaultNSE(){
+  const n=(DB.nses()||[]); return n.length? n[0].name : 'Tyler Lee';
+}
+function tcMoney(n){ n=Number(n)||0; return '$'+Math.round(n).toLocaleString('en-US'); }
+function tcQuarterListStored(){
+  try{ const a=JSON.parse(localStorage.getItem('hht_tc_quarters')||'null'); if(Array.isArray(a)&&a.length) return a; }catch(e){}
+  return ['Q2-26','Q3-26'];
+}
+function tcSaveQuarters(a){ try{ localStorage.setItem('hht_tc_quarters', JSON.stringify(a)); }catch(e){} }
+function tcParseQ(label){ const m=String(label||'').match(/Q?\s*(\d)\D+(\d{2,4})/i); if(!m) return {q:0,y:0}; let y=+m[2]; if(y<100) y+=2000; return {q:+m[1], y}; }
+function tcQCmp(a,b){ const pa=tcParseQ(a), pb=tcParseQ(b); return (pa.y-pb.y)||(pa.q-pb.q); }
+/* every top-customer record = a DB.customers() entry flagged topCust */
+function tcList(){
+  const c=DB.customers()||{};
+  return Object.keys(c).filter(k=>c[k]&&c[k].topCust).map(k=>({name:k, meta:c[k]}));
+}
+function tcAllQuarterCols(){
+  const set=new Set(tcQuarterListStored());
+  tcList().forEach(c=>Object.keys(c.meta.quarters||{}).forEach(k=>set.add(k)));
+  return [...set].sort(tcQCmp);
+}
+function tcTotal(meta){ const q=meta.quarters||{}; return Object.keys(q).reduce((s,k)=>s+(Number(q[k])||0),0); }
+function tcSet(name, patch){ const c=DB.customers()||{}; c[name]=Object.assign({}, c[name], patch); DB.saveCustomers(c); }
+function tcSetQuarter(name, col, val){
+  const c=DB.customers()||{}; const m=Object.assign({}, c[name]); m.quarters=Object.assign({}, m.quarters);
+  const n=String(val).replace(/[^0-9.\-]/g,''); if(n==='') delete m.quarters[col]; else m.quarters[col]=Number(n)||0;
+  c[name]=m; DB.saveCustomers(c);
+}
+function tcAddQuarterCol(){
+  let lbl=prompt('New quarter column label (e.g. Q4-26):',''); if(lbl==null) return;
+  lbl=lbl.trim().toUpperCase().replace(/\s+/g,''); if(!/^Q\d-\d{2,4}$/.test(lbl)){ toast('Use a format like Q4-26'); return; }
+  const list=tcQuarterListStored(); if(list.indexOf(lbl)<0){ list.push(lbl); list.sort(tcQCmp); tcSaveQuarters(list); }
+  route(); toast('Added column '+lbl);
+}
+function tcQuarterSeries(){
+  const cols=tcAllQuarterCols(); const list=tcList();
+  return cols.map(col=>({label:col, rev:list.reduce((s,c)=>s+(Number((c.meta.quarters||{})[col])||0),0)}));
+}
+/* top 5 = starred first, then by NSE Total */
+function tcTop5(){
+  return tcList().slice().sort((a,b)=>((b.meta.fav?1:0)-(a.meta.fav?1:0)) || (tcTotal(b.meta)-tcTotal(a.meta))).slice(0,5);
+}
+
+/* =====================================================================
+   1) TOP CUSTOMER PAGE  (spreadsheet, manual entry)
+   ===================================================================== */
+window.pageCustomerOpps = function(){
+  const list0=tcList();
+  const cols=tcAllQuarterCols();
+  const search=((typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'').toLowerCase().trim();
+  const sort=(typeof COPP_SORT!=='undefined')?COPP_SORT:'total';
+  let list=list0.slice();
+  if(search) list=list.filter(c=>[c.name,c.meta.cid,c.meta.associatedIds,c.meta.nseName,c.meta.mode].join(' ').toLowerCase().includes(search));
+  if(sort==='total') list.sort((a,b)=>tcTotal(b.meta)-tcTotal(a.meta));
+  else if(sort==='top') list.sort((a,b)=>((b.meta.fav?1:0)-(a.meta.fav?1:0))||tcTotal(b.meta)-tcTotal(a.meta));
+  else if(sort==='name') list.sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sort==='cid') list.sort((a,b)=>String(a.meta.cid||'').localeCompare(String(b.meta.cid||'')));
+
+  /* KPIs */
+  const grand=list0.reduce((s,c)=>s+tcTotal(c.meta),0);
+  const tops=list0.filter(c=>c.meta.fav).length;
+  const fromFunnel=list0.filter(c=>c.meta.fromFunnel).length;
+  const kpis=`<div class="kpi-grid">
+    ${kpi('Top Customers',list0.length,'b-blue')}
+    ${kpi('NSE Total (All)',tcMoney(grand),'b-green')}
+    ${kpi('⭐ Starred',tops,'b-amber','shown on dashboard')}
+    ${kpi('From Prospect Funnel',fromFunnel,'b-navy','auto-added')}
+  </div>`;
+
+  /* QoQ growth from the quarter columns */
+  const series=tcQuarterSeries();
+  const g=(function(){ if(series.length<2) return {pct:null}; const last=series[series.length-1].rev||0, prev=series[series.length-2].rev||0; let pct=prev>0?Math.round((last-prev)/prev*100):(last>0?100:0); return {pct,last,prev}; })();
+  const growthChip=g.pct==null?`<span class="tag">— add another quarter to compare —</span>`
+    :`<span style="font-weight:800;color:${g.pct>=0?'var(--green)':'var(--red)'}">${g.pct>=0?'▲ +':'▼ '}${g.pct}%</span> <span style="color:var(--muted);font-size:12px">QoQ (${tcMoney(g.prev)}→${tcMoney(g.last)})</span>`;
+  const chartSeries=series.map(s=>({label:s.label, ships:s.rev}));   /* reuse v5 chart on 'ships' key */
+  const growthCard=`<div class="card">
+    <div class="card-head"><h3>📈 Growth — Quarter over Quarter</h3><span style="font-size:13px">${growthChip}</span></div>
+    <div class="card-sub">Total NSE revenue booked each quarter across all Top Customers. Values come straight from the quarter columns below.</div>
+    ${(typeof v5LineSVG==='function' && series.length)? v5LineSVG(chartSeries,'ships') : '<div class="empty" style="padding:20px">Add quarter revenue below to chart growth.</div>'}
+  </div>`;
+
+  const sortSel=`<select style="max-width:190px" onchange="COPP_SORT=this.value;route()">
+      <option value="total" ${sort==='total'?'selected':''}>Sort: NSE Total ↓</option>
+      <option value="top" ${sort==='top'?'selected':''}>Sort: Top Customers First</option>
+      <option value="name" ${sort==='name'?'selected':''}>Sort: Customer A→Z</option>
+      <option value="cid" ${sort==='cid'?'selected':''}>Sort: CID</option>
+    </select>`;
+
+  /* spreadsheet */
+  const qHeads=cols.map(c=>`<th style="text-align:right;white-space:nowrap">${esc(c)}</th>`).join('');
+  const rows=list.map(c=>{ const m=c.meta; const nm=jsq(c.name);
+    const qCells=cols.map(col=>{ const v=(m.quarters||{})[col]; return `<td style="text-align:right;white-space:nowrap;color:${v?'var(--ink)':'#c9d2dc'}">${v?tcMoney(v):''}</td>`; }).join('');
+    return `<tr style="cursor:pointer;${m.fav?'background:#fff8ec':''}" onclick="openCustomerDetail('${nm}')">
+      <td onclick="event.stopPropagation();toggleCustFav('${nm}')" title="${m.fav?'Remove Top Customer':'Mark as Top Customer'}" style="text-align:center;font-size:16px;color:${m.fav?'var(--accent)':'#c9d2dc'}">${m.fav?'★':'☆'}</td>
+      <td style="white-space:nowrap"><strong>${esc(c.name)}</strong>${m.fromFunnel?' <span class="pill won" title="Converted from Prospect Funnel">🎉</span>':''}</td>
+      <td style="white-space:nowrap;color:var(--muted)">${esc(m.cid||'')}</td>
+      <td style="white-space:nowrap;color:var(--muted)">${esc(m.associatedIds||'')}</td>
+      <td style="white-space:nowrap"><span class="pill type">${esc(m.mode||'OSOW')}</span></td>
+      <td style="white-space:nowrap">${esc(m.nseName||'')}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.nseStart?fmtDate(m.nseStart):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.nseEnd?fmtDate(m.nseEnd):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.closeStart?fmtDate(m.closeStart):'—'}</td>
+      <td style="white-space:nowrap;font-size:12px">${m.closeEnd?fmtDate(m.closeEnd):'—'}</td>
+      ${qCells}
+      <td style="text-align:right;white-space:nowrap"><strong>${tcMoney(tcTotal(m))}</strong></td>
+    </tr>`;
+  }).join('');
+  const totalsRow=(function(){
+    const qTot=cols.map(col=>{ const t=list.reduce((s,c)=>s+(Number((c.meta.quarters||{})[col])||0),0); return `<td style="text-align:right;font-weight:800">${t?tcMoney(t):''}</td>`; }).join('');
+    const grandShown=list.reduce((s,c)=>s+tcTotal(c.meta),0);
+    return `<tr style="background:var(--th-bg);font-weight:800"><td></td><td>Total</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>${qTot}<td style="text-align:right">${tcMoney(grandShown)}</td></tr>`;
+  })();
+  const body = list.length ? `<div class="card">
+      <div class="card-head"><h3>Top Customers <span style="color:var(--muted);font-weight:500;font-size:13px">(${list.length})</span></h3>
+        <span style="font-size:12px;color:var(--muted)">Click any row to open &amp; edit the full record</span></div>
+      <div class="table-wrap"><table style="min-width:${1080+cols.length*90}px">
+        <thead><tr><th style="width:34px">★</th><th>Customer</th><th>CID</th><th>AssociatedCustomerIDs</th><th>Mode</th><th>NSEName</th><th>NSEStart</th><th>NSEEnd</th><th>CloseStartDate</th><th>CloseEndDate</th>${qHeads}<th style="text-align:right">NSE Total</th></tr></thead>
+        <tbody>${rows}${totalsRow}</tbody>
+      </table></div></div>`
+    : `<div class="card"><div class="empty">No Top Customers yet. Click <strong>＋ Add Customer</strong> to enter one, or win a prospect in the Prospect Funnel and it lands here automatically.</div></div>`;
+
+  return `
+  <div class="page-title">🏢 Top Customer</div>
+  <div class="page-sub">Your book of Top Customers — <strong>manually entered</strong> (no longer pulled from the quote log). Track CID, mode, NSE window, close dates, and quarterly NSE revenue. Prospects won in the <strong>Prospect Funnel</strong> are added here automatically. Star up to five for the dashboard.</div>
+  ${growthCard}
+  ${kpis}
+  <div class="card" style="padding:14px 18px;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px"><label style="margin-bottom:6px">Search</label><input placeholder="Customer, CID, NSE, mode…" value="${esc((typeof COPP_SEARCH!=='undefined')?COPP_SEARCH:'')}" oninput="COPP_SEARCH=this.value;coppSearchDebounce()"></div>
+    <div><label style="margin-bottom:6px">Sort</label>${sortSel}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" style="width:auto" onclick="tcAddQuarterCol()">＋ Quarter</button>
+      <button class="btn btn-ghost" style="width:auto" onclick="tcManagerSummary()">📋 Manager Summary</button>
+      <button class="btn btn-primary" style="width:auto" onclick="openAddTopCustomer()">＋ Add Customer</button>
+    </div>
+  </div>
+  ${body}`;
+};
+
+/* ---------- Add Customer ---------- */
+function openAddTopCustomer(){
+  const box=document.getElementById('modalBox');
+  box.parentElement.querySelector('.modal').classList.remove('xwide'); box.parentElement.querySelector('.modal').classList.add('wide');
+  box.innerHTML=`<h3>＋ Add Top Customer</h3>
+    <div class="card-sub" style="margin-bottom:14px">Enter a customer manually. You can fill quarterly NSE revenue after saving by clicking the row.</div>
+    <div class="form-row"><div class="field-c" style="grid-column:1/-1"><label>Customer Name</label><input id="tc_name" placeholder="Company name"></div></div>
+    <div class="form-row"><div class="field-c"><label>CID</label><input id="tc_cid" placeholder="e.g. 2969454"></div>
+      <div class="field-c"><label>Associated Customer IDs</label><input id="tc_assoc" placeholder="comma separated"></div></div>
+    <div class="form-row"><div class="field-c"><label>Mode</label><input id="tc_mode" value="OSOW"></div>
+      <div class="field-c"><label>NSE Name</label><input id="tc_nse" value="${esc(tcDefaultNSE())}"></div></div>
+    <div class="form-row"><div class="field-c"><label>NSE Start</label><input id="tc_nsestart" type="date"></div>
+      <div class="field-c"><label>NSE End</label><input id="tc_nseend" type="date"></div></div>
+    <div class="form-row"><div class="field-c"><label>Close Start Date</label><input id="tc_closestart" type="date"></div>
+      <div class="field-c"><label>Close End Date</label><input id="tc_closeend" type="date"></div></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="width:auto" onclick="saveNewTopCustomer()">Add Customer</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+function saveNewTopCustomer(){
+  const name=val('tc_name'); if(!name){ toast('Customer name required'); return; }
+  const c=DB.customers()||{};
+  if(c[name] && c[name].topCust){ toast('That customer already exists'); return; }
+  c[name]=Object.assign({}, c[name], {
+    topCust:true, manual:true,
+    cid:val('tc_cid'), associatedIds:val('tc_assoc'), mode:val('tc_mode')||'OSOW', nseName:val('tc_nse')||tcDefaultNSE(),
+    nseStart:val('tc_nsestart'), nseEnd:val('tc_nseend'), closeStart:val('tc_closestart'), closeEnd:val('tc_closeend'),
+    quarters:(c[name]&&c[name].quarters)||{}
+  });
+  DB.saveCustomers(c); closeModal(); route(); toast('Customer added');
+}
+
+/* ---------- Detail drawer (spreadsheet fields + action items / visit / notes / new opps) ---------- */
+function openCustomerDetail(name){
+  const meta=(DB.customers()||{})[name]||{};
+  const cols=tcAllQuarterCols();
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal'); modal.classList.remove('wide'); modal.classList.add('xwide');
+  const sec=(t)=>`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:8px">${t}</div>`;
+  const fld=(lbl,id,val,type)=>`<div class="field-c"><label>${lbl}</label><input id="${id}" ${type?('type="'+type+'"'):''} value="${esc(val||'')}" onchange="tcDetailField('${jsq(name)}','${id}',this.value)"></div>`;
+
+  /* quarter revenue inputs */
+  const qInputs=cols.map(col=>`<div class="field-c"><label>${esc(col)} ($)</label><input type="number" min="0" value="${(meta.quarters||{})[col]!=null?(meta.quarters||{})[col]:''}" placeholder="0" onchange="tcSetQuarter('${jsq(name)}','${col}',this.value);openCustomerDetail('${jsq(name)}')"></div>`).join('');
+
+  /* action items */
+  const acts=(meta.actionItems||[]);
+  const actList = acts.length ? acts.map((a,i)=>`<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--card)">
+      <input type="checkbox" style="width:auto" ${a.done?'checked':''} onchange="custToggleAction('${jsq(name)}',${i},this.checked)">
+      <span style="flex:1;font-size:13px;${a.done?'text-decoration:line-through;color:var(--muted)':''}">${esc(a.text)}</span>
+      <button class="rowbtn del" onclick="custDelAction('${jsq(name)}',${i})">✕</button></label>`).join('') : `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">No action items yet.</div>`;
+  const actDone=acts.filter(a=>a.done).length;
+  /* new opps */
+  const nops=(meta.newOpps||[]);
+  const nopList = nops.length ? nops.map((o,i)=>`<div class="note-item"><div class="meta"><span>🕒 ${fmtDateTime(o.ts)}</span><button class="note-del" onclick="custDelNewOpp('${jsq(name)}',${i})">Delete</button></div><div class="body">${esc(o.text)}</div></div>`).join('') : `<div style="font-size:12px;color:var(--muted)">No new opportunities logged yet.</div>`;
+  /* notes */
+  const notes=(meta.notes||[]).slice().reverse();
+  const noteList = notes.length ? notes.map((n,ri)=>{ const realIdx=(meta.notes.length-1)-ri;
+      return `<div class="note-item"><div class="meta"><span>🕒 ${fmtDateTime(n.ts)}</span><button class="note-del" onclick="custDelNote('${jsq(name)}',${realIdx})">Delete</button></div><div class="body">${esc(n.text)}</div></div>`;
+    }).join('') : `<div style="font-size:12px;color:var(--muted)">No notes yet.</div>`;
+
+  box.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div><h3 style="margin:0">🏢 ${esc(name)}</h3>
+        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span class="tag">${esc(meta.mode||'OSOW')}</span>
+          <span class="tag">NSE: ${esc(meta.nseName||tcDefaultNSE())}</span>
+          ${meta.fromFunnel?'<span class="pill won">🎉 From Prospect Funnel</span>':''}
+          ${meta.tier?`<span class="tag">${esc(meta.tier)}</span>`:''}
+          <span style="font-weight:800;color:var(--green)">NSE Total ${tcMoney(tcTotal(meta))}</span>
+        </div>
+      </div>
+      <button class="btn ${meta.fav?'btn-primary':'btn-ghost'}" style="width:auto;white-space:nowrap" onclick="toggleCustFav('${jsq(name)}');openCustomerDetail('${jsq(name)}')">${meta.fav?'★ Top Customer':'☆ Mark Top Customer'}</button>
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('🧾 Customer Record')}
+      <div class="form-row">${fld('CID','tc_d_cid',meta.cid)}${fld('Associated Customer IDs','tc_d_assoc',meta.associatedIds)}</div>
+      <div class="form-row">${fld('Mode','tc_d_mode',meta.mode||'OSOW')}${fld('NSE Name','tc_d_nse',meta.nseName||tcDefaultNSE())}</div>
+      <div class="form-row">${fld('NSE Start','tc_d_nsestart',meta.nseStart,'date')}${fld('NSE End','tc_d_nseend',meta.nseEnd,'date')}</div>
+      <div class="form-row">${fld('Close Start Date','tc_d_closestart',meta.closeStart,'date')}${fld('Close End Date','tc_d_closeend',meta.closeEnd,'date')}</div>
+      <div class="form-row">${fld('Priority Tier (for Manager Summary)','tc_d_tier',meta.tier)}<div class="field-c"></div></div>
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('💵 Quarterly NSE Revenue')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">${qInputs||'<div style="font-size:12px;color:var(--muted)">No quarter columns yet — add one with ＋ Quarter on the list.</div>'}</div>
+      <div style="text-align:right;margin-top:10px;font-weight:800;color:var(--ink)">NSE Total: ${tcMoney(tcTotal(meta))}</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:16px">
+      <div class="dsec">
+        ${sec('✅ Action Item Checklist '+(acts.length?('· '+actDone+'/'+acts.length):''))}
+        ${actList}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input id="custActInput" placeholder="Add an action item…" onkeydown="if(event.key==='Enter')custAddAction('${jsq(name)}')">
+          <button class="btn btn-primary" style="width:auto" onclick="custAddAction('${jsq(name)}')">＋ Add</button>
+        </div>
+      </div>
+      <div class="dsec">
+        ${sec('📅 Customer Visit Date')}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="custVisitInput" type="date" style="max-width:200px" value="${esc(meta.visitDate||'')}" onchange="custSetVisit('${jsq(name)}',this.value)">
+          ${meta.visitDate?`<span class="tag">${fmtDate(meta.visitDate)}</span><button class="rowbtn" onclick="custSetVisit('${jsq(name)}','')">Clear</button>`:'<span style="font-size:12px;color:var(--muted)">No visit scheduled</span>'}
+        </div>
+        ${sec('💡 New Opportunities')}
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="custOppInput" placeholder="e.g. New lane / added service…" onkeydown="if(event.key==='Enter')custAddNewOpp('${jsq(name)}')">
+          <button class="btn btn-primary" style="width:auto" onclick="custAddNewOpp('${jsq(name)}')">＋ Add</button>
+        </div>
+        <div class="note-list" style="max-height:170px">${nopList}</div>
+      </div>
+    </div>
+
+    <div class="dsec" style="margin-top:16px">
+      ${sec('📝 Notes')}
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <textarea id="custNoteInput" style="flex:1;min-height:52px" placeholder="Add an update on this customer…"></textarea>
+        <button class="btn btn-primary" style="width:auto" onclick="custAddNote('${jsq(name)}')">＋ Add</button>
+      </div>
+      <div class="note-list">${noteList}</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>
+      <button class="btn btn-ghost del" style="width:auto;background:#fdeaea;color:var(--red)" onclick="deleteCustomer('${jsq(name)}')">🗑️ Delete Customer</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+/* map detail input ids -> record fields */
+function tcDetailField(name, id, value){
+  const map={tc_d_cid:'cid', tc_d_assoc:'associatedIds', tc_d_mode:'mode', tc_d_nse:'nseName',
+    tc_d_nsestart:'nseStart', tc_d_nseend:'nseEnd', tc_d_closestart:'closeStart', tc_d_closeend:'closeEnd', tc_d_tier:'tier'};
+  const f=map[id]; if(!f) return; tcSet(name, {[f]:value}); toast('Saved');
+}
+
+/* =====================================================================
+   2) PROSPECT WON  ->  auto-add to Top Customer
+   ===================================================================== */
+if(typeof window.oppMarkWon==='function'){
+  const _markWon=window.oppMarkWon;
+  window.oppMarkWon=function(id){
+    const o=(typeof oppById==='function')?oppById(id):null;
+    _markWon(id);                                   /* base flow: flags won + writes customers[key] */
+    if(o){ const key=(o.company||'').trim(); if(key){
+      const c=DB.customers()||{};
+      c[key]=Object.assign({}, c[key], {
+        topCust:true, manual:true, fromFunnel:true,
+        mode:(c[key]&&c[key].mode)||'OSOW',
+        nseName:(c[key]&&c[key].nseName)||tcDefaultNSE(),
+        cid:(c[key]&&c[key].cid)||'', associatedIds:(c[key]&&c[key].associatedIds)||'',
+        tier:(c[key]&&c[key].tier)||o.tier||'',
+        quarters:(c[key]&&c[key].quarters)||{}
+      });
+      DB.saveCustomers(c);
+    }}
+  };
+}
+if(typeof oppMarkWon==='function'){ try{ oppMarkWon=window.oppMarkWon; }catch(e){} }
+
+/* =====================================================================
+   3) DASHBOARD — one prospects panel + renamed "Top Customer" panel
+   ===================================================================== */
+/* remove the base "Top Opportunities" block (was duplicating prospects) */
+if(typeof nseTopOpps==='function'){ try{ nseTopOpps=function(){ return ''; }; window.nseTopOpps=nseTopOpps; }catch(e){ window.nseTopOpps=function(){return '';}; } }
+
+/* "Top Customer" dashboard panel (replaces the old customer coppTopPanel) */
+window.coppTopPanel = function(){
+  const tops=tcTop5();
+  const cards = tops.length ? tops.map(c=>{ const m=c.meta; const nm=jsq(c.name);
+    return `<div class="card" style="margin:0;min-width:210px;flex:1;border-left:4px solid var(--green)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">
+        <strong style="font-size:13px;line-height:1.25">${esc(c.name)}</strong>
+        <button class="rowbtn" style="background:none;padding:0;font-size:16px;color:var(--accent)" onclick="toggleCustFav('${nm}')" title="Remove from Top Customers">${m.fav?'★':'☆'}</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">${esc(m.mode||'OSOW')} · NSE ${esc(m.nseName||tcDefaultNSE())}${m.cid?(' · CID '+esc(m.cid)):''}</div>
+      <div style="margin-top:6px;font-weight:800;color:var(--green)">${tcMoney(tcTotal(m))} <span style="font-weight:500;color:var(--muted);font-size:11px">NSE Total</span></div>
+    </div>`;
+  }).join('') : `<div class="empty" style="padding:18px;flex:1">No Top Customers yet. Add one on <span style="color:var(--accent2);font-weight:600;cursor:pointer" onclick="go('custopps')">Top Customer</span>, or win a prospect in the funnel.</div>`;
+  return `<div class="card">
+    <div class="card-head"><h3>⭐ Top Customer <span style="color:var(--muted);font-weight:500;font-size:13px">(${tops.length})</span></h3>
+      <button class="btn btn-ghost" style="width:auto" onclick="go('custopps')">Open Top Customer →</button></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${cards}</div></div>`;
+};
+if(typeof coppTopPanel==='function'){ try{ coppTopPanel=window.coppTopPanel; }catch(e){} }
+
+/* Re-wrap the dashboard: retitle the combined section + add Manager Summary button */
+if(typeof window.pageNseDash==='function'){
+  const _v5dash=window.pageNseDash;
+  window.pageNseDash=function(){
+    let html=_v5dash();
+    html=html.replace(
+      '<div class="card-head"><h3>⭐ Funnel Top 5 — Customers &amp; Prospects</h3></div>',
+      '<div class="card-head"><h3>⭐ Top Customer &amp; Top Prospects</h3><button class="btn btn-ghost" style="width:auto" onclick="tcManagerSummary()">📋 Manager Summary</button></div>'
+    );
+    html=html.replace(
+      'The five starred <strong>Top Customers</strong> and the five starred <strong>Top Prospects</strong> from the Prospect Funnel. Star them on Customer Opportunities and the Prospect Funnel, or use each panel\'s <em>Suggest Top 5</em>.',
+      'Your five <strong>Top Customers</strong> and the five starred <strong>Top Prospects</strong> from the Prospect Funnel — combined into one place. Star customers on Top Customer and prospects on the Prospect Funnel.'
+    );
+    return html;
+  };
+}
+
+/* =====================================================================
+   4) MANAGER SUMMARY — Top 5 Customers + Top Prospects (OSR-styled)
+   ===================================================================== */
+let TCS = null;   /* summary config */
+function tcsDefault(){ return { groupByTier:false, includeNotes:true, preparedFor:'' }; }
+function tcTopProspects(){
+  return oppList().filter(o=>o.topOpp).sort((a,b)=> (typeof oppScore==='function'? (oppScore(b)-oppScore(a)) : ((+b.likelihood||0)-(+a.likelihood||0)) ) ).slice(0,5);
+}
+function tcTierOf(x, isCust){
+  if(isCust) return (x.meta && x.meta.tier) ? x.meta.tier : 'Untiered';
+  return x.tier || 'Untiered';
+}
+function tcManagerSummaryHTML(){
+  const custs=tcTop5();
+  const pros=tcTopProspects();
+  const preparedBy=(function(){ if(typeof ACTIVE_ROLE!=='undefined'){ if(ACTIVE_ROLE==='nse') return nseName(ACTIVE_NSE); if(ACTIVE_ROLE==='rep') return repName(ACTIVE_REP); } return tcDefaultNSE(); })();
+  const custTotal=custs.reduce((s,c)=>s+tcTotal(c.meta),0);
+  const kpi=(v,l,hl)=>`<div style="flex:1;min-width:120px;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;${hl?'border-color:#e07a00;background:#fff8ec':''}">
+    <div style="font-size:22px;font-weight:800;color:#0b2545;line-height:1">${v}</div>
+    <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7a8d;margin-top:4px">${l}</div></div>`;
+
+  function custCard(c){ const m=c.meta;
+    const notes=(TCS.includeNotes && (m.notes||[]).length)?`<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #e2e8f0">${m.notes.map(n=>`<div style="font-size:11.5px;color:#4a5766"># ${esc(n.text)}</div>`).join('')}</div>`:'';
+    const qbits=Object.keys(m.quarters||{}).sort(tcQCmp).map(k=>`${esc(k)}: ${tcMoney(m.quarters[k])}`).join(' · ');
+    return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:11px 13px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div><div style="font-size:15px;font-weight:800;color:#0b2545">${esc(c.name)}</div>
+          <div style="font-size:12px;color:#6b7a8d;margin-top:2px">${esc(m.mode||'OSOW')} · NSE ${esc(m.nseName||preparedBy)}${m.cid?(' · CID '+esc(m.cid)):''}${m.tier?(' · '+esc(m.tier)):''}</div></div>
+        <div style="text-align:right;white-space:nowrap"><div style="font-size:16px;font-weight:800;color:#1b873f">${tcMoney(tcTotal(m))}</div><div style="font-size:11px;color:#6b7a8d">NSE Total</div></div>
+      </div>
+      ${qbits?`<div style="font-size:12px;color:#4a5766;margin-top:5px">${qbits}</div>`:''}
+      ${notes}
+    </div>`;
+  }
+  function proCard(o){ const f=FUNNEL_MAP[oppStage(o)]; const vt=o.intake?oppVolumeText(o.intake):'';
+    const notes=(TCS.includeNotes && (o.notesLog||[]).length)?`<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #e2e8f0">${o.notesLog.map(n=>`<div style="font-size:11.5px;color:#4a5766"># ${esc(n.text)}</div>`).join('')}</div>`:'';
+    return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:11px 13px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div><div style="font-size:15px;font-weight:800;color:#0b2545">${esc(o.company)}</div>
+          <div style="font-size:12px;color:#6b7a8d;margin-top:2px">${esc(o.broker||'—')}${o.office?(' · '+esc(o.office)):''} · ${esc(o.tier||'Untiered')}</div></div>
+        <div style="text-align:right;white-space:nowrap"><div style="font-size:16px;font-weight:800;color:#0b2545">${esc(o.likelihood||'—')}/10</div>
+          <span style="background:${f.color};color:#fff;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700">${f.label}</span></div>
+      </div>
+      ${vt?`<div style="font-size:12px;color:#4b3fb0;margin-top:5px">📦 ${esc(vt)}</div>`:''}
+      ${notes}
+    </div>`;
+  }
+  function section(title, items, cardFn, isCust){
+    let inner;
+    if(!items.length){ inner='<div style="color:#6b7a8d;padding:6px 2px">None yet.</div>'; }
+    else if(TCS.groupByTier){
+      const groups={}; items.forEach(x=>{ const t=tcTierOf(x,isCust); (groups[t]=groups[t]||[]).push(x); });
+      const order=OPP_TIERS.concat(['Untiered']);
+      inner=order.filter(t=>groups[t]&&groups[t].length).map(t=>
+        `<div style="font-size:12px;font-weight:800;color:#134074;text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px">${esc(t)} <span style="color:#6b7a8d;font-weight:600">(${groups[t].length})</span></div>`+
+        groups[t].map(cardFn).join('')
+      ).join('');
+    } else { inner=items.map(cardFn).join(''); }
+    return `<div style="font-size:13px;font-weight:800;color:#e07a00;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #e2e8f0;padding-bottom:6px;margin:16px 0 8px">${title}</div>${inner}`;
+  }
+  return `<div style="font-family:'Segoe UI',Arial,sans-serif;color:#1a2733">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:3px solid #e07a00;padding-bottom:12px;margin-bottom:14px">
+      <div style="display:flex;gap:12px;align-items:center">
+        <div style="width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#e07a00,#b85e00);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px">HH</div>
+        <div><div style="font-size:20px;font-weight:800;color:#0b2545">Top Opportunities Summary</div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7a8d">Top 5 Customers &amp; Top Prospects</div></div>
+      </div>
+      <div style="text-align:right"><div style="font-size:12px;color:#6b7a8d">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div></div>
+    </div>
+    <div style="font-size:12px;color:#134074;margin-bottom:12px">Prepared by: <strong>${esc(preparedBy)}</strong>${TCS.preparedFor?` &nbsp;·&nbsp; Prepared for: <strong>${esc(TCS.preparedFor)}</strong>`:''} &nbsp;·&nbsp; Grouping: <strong>${TCS.groupByTier?'By Tier':'None'}</strong></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      ${kpi(custs.length,'Top Customers',true)}${kpi(tcMoney(custTotal),'Customer NSE Total')}${kpi(pros.length,'Top Prospects')}
+    </div>
+    ${section('🏢 Top Customers', custs, custCard, true)}
+    ${section('🧲 Top Prospects', pros, proCard, false)}
+  </div>`;
+}
+function tcManagerSummaryText(){
+  const custs=tcTop5(), pros=tcTopProspects();
+  const L=[]; L.push('TOP OPPORTUNITIES SUMMARY — Top 5 Customers & Top Prospects');
+  L.push(fmtDate(todayISO())+(TCS.preparedFor?('   ·   For: '+TCS.preparedFor):''));
+  L.push('='.repeat(52));
+  const custBucket = TCS.groupByTier ? OPP_TIERS.concat(['Untiered']).map(t=>({t, items:custs.filter(c=>tcTierOf(c,true)===t)})).filter(g=>g.items.length) : [{t:null, items:custs}];
+  L.push(''); L.push('TOP CUSTOMERS ('+custs.length+')'); L.push('-'.repeat(30));
+  if(!custs.length) L.push('  (none)');
+  custBucket.forEach(g=>{ if(g.t){ L.push('  ['+g.t+']'); }
+    g.items.forEach(c=>{ const m=c.meta;
+      L.push('  • '+c.name+'  —  NSE Total '+tcMoney(tcTotal(m)));
+      L.push('      Mode: '+(m.mode||'OSOW')+'  |  NSE: '+(m.nseName||tcDefaultNSE())+(m.cid?('  |  CID '+m.cid):''));
+      const qs=Object.keys(m.quarters||{}).sort(tcQCmp); if(qs.length) L.push('      '+qs.map(k=>k+': '+tcMoney(m.quarters[k])).join('  ·  '));
+      if(TCS.includeNotes) (m.notes||[]).forEach(n=>L.push('      # '+n.text));
+    });
+  });
+  const proBucket = TCS.groupByTier ? OPP_TIERS.concat(['Untiered']).map(t=>({t, items:pros.filter(o=>tcTierOf(o,false)===t)})).filter(g=>g.items.length) : [{t:null, items:pros}];
+  L.push(''); L.push('TOP PROSPECTS ('+pros.length+')'); L.push('-'.repeat(30));
+  if(!pros.length) L.push('  (none)');
+  proBucket.forEach(g=>{ if(g.t){ L.push('  ['+g.t+']'); }
+    g.items.forEach(o=>{ L.push('  • '+o.company+'  —  '+(o.likelihood||'—')+'/10  ·  '+FUNNEL_MAP[oppStage(o)].label);
+      L.push('      Broker: '+(o.broker||'—')+(o.office?('  |  '+o.office):'')+'  |  '+(o.tier||'Untiered'));
+      const vt=o.intake?oppVolumeText(o.intake):''; if(vt) L.push('      Volume: '+vt);
+      if(TCS.includeNotes) (o.notesLog||[]).forEach(n=>L.push('      # '+n.text));
+    });
+  });
+  return L.join('\n');
+}
+function tcManagerSummary(){
+  TCS=TCS||tcsDefault();
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal'); modal.classList.add('wide'); modal.classList.add('xwide');
+  box.innerHTML=`<h3>📋 Manager Summary — Top 5 Customers &amp; Top Prospects</h3>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      <div style="flex:1;min-width:180px"><label>Prepared For (Manager)</label><input value="${esc(TCS.preparedFor)}" placeholder="e.g. Brandon Vest" onchange="TCS.preparedFor=this.value;tcRenderSummary()"></div>
+      <div><label style="margin-bottom:6px">Group</label>
+        <div class="filterbar" style="margin:0">
+          <button class="chip ${!TCS.groupByTier?'active':''}" onclick="TCS.groupByTier=false;tcRenderSummary()">None</button>
+          <button class="chip ${TCS.groupByTier?'active':''}" onclick="TCS.groupByTier=true;tcRenderSummary()">By Tier</button>
+        </div></div>
+      <div><label style="margin-bottom:6px">Notes</label>
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-weight:700;margin:0;cursor:pointer"><input type="checkbox" style="width:auto" ${TCS.includeNotes?'checked':''} onclick="TCS.includeNotes=!TCS.includeNotes;tcRenderSummary()"> Include notes</label></div>
+    </div>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Live Preview — this is exactly what your manager receives</div>
+    <div id="tcsPreview" style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;max-height:54vh;overflow:auto">${tcManagerSummaryHTML()}</div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" style="width:auto" onclick="tcSummaryDownload()">⬇ Download</button>
+        <button class="btn btn-ghost" style="width:auto" onclick="tcSummaryPrint()">🖨️ Print / PDF</button>
+        <button class="btn btn-primary" style="width:auto" onclick="tcSummaryCopy()">📋 Copy report</button>
+      </div>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+function tcRenderSummary(){ const el=document.getElementById('tcsPreview'); if(el) el.innerHTML=tcManagerSummaryHTML(); }
+function tcSummaryDownload(){ const html='<!doctype html><html><head><meta charset="utf-8"><title>Top Opportunities Summary</title></head><body style="margin:28px">'+tcManagerSummaryHTML()+'</body></html>';
+  download('Top Opportunities Summary '+todayISO()+'.html', html, 'text/html'); toast('Report downloaded'); }
+function tcSummaryPrint(){ const w=window.open('','_blank'); if(!w){ toast('Pop-up blocked — use Copy'); return; }
+  w.document.write('<html><head><meta charset="utf-8"><title>Top Opportunities Summary</title></head><body style="margin:28px">'+tcManagerSummaryHTML()+'</body></html>'); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},250); }
+function tcSummaryCopy(){ const txt=tcManagerSummaryText();
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(()=>toast('Report copied')); }
+  else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');toast('Report copied');}catch(e){} ta.remove(); } }
+
+/* expose inline handlers */
+window.tcAddQuarterCol=tcAddQuarterCol; window.tcSetQuarter=tcSetQuarter; window.tcDetailField=tcDetailField;
+window.openAddTopCustomer=openAddTopCustomer; window.saveNewTopCustomer=saveNewTopCustomer;
+window.openCustomerDetail=openCustomerDetail;
+window.tcManagerSummary=tcManagerSummary; window.tcRenderSummary=tcRenderSummary;
+window.tcSummaryDownload=tcSummaryDownload; window.tcSummaryPrint=tcSummaryPrint; window.tcSummaryCopy=tcSummaryCopy;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+
+<script>
+/* ===================================================================
+   IMPORT CENTER v7 — PROSPECT FUNNEL CSV IMPORT
+   -------------------------------------------------------------------
+   Adds a CSV uploader to the Import Center that ingests the exact
+   columns produced by the Office Summary Report export:
+     Company, Broker, Office, Industry, Tier, Likelihood, Progress,
+     Type, Deal Type, Volume, Modes, Equipment, Notes
+   It follows the SAME review rules as the JSON import:
+     • ADDITIONS  — rows in the CSV not already in the funnel  (added)
+     • DUPLICATES — rows already in the funnel                 (NOT added)
+     • REMOVALS   — funnel opps in the CSV's office(s) that are
+                    NOT in the CSV                             (opt-in remove)
+   Nothing is written until you approve; a backup is saved so the
+   existing "Undo Last Import" restores everything.
+   =================================================================== */
+
+/* ---------- staging state ---------- */
+let FUNNEL_CSV = null;
+
+/* ---------- helpers ---------- */
+function fcsvNorm(s){ return (s==null?'':String(s)).replace(/\s+/g,' ').trim().toLowerCase(); }
+function fcsvKey(company, office){ return fcsvNorm(company)+'||'+fcsvNorm(office); }
+
+/* Progress label -> funnel flags + derived status */
+function fcsvProgToFields(prog){
+  const p=fcsvNorm(prog);
+  const f={ brokerContacted:false, nseConversation:false, readyToQuote:false, noOpp:false };
+  if(p.indexOf('exclud')>=0){ f.noOpp=true; f.status='0 - Excluded (No Opportunity)'; return f; }
+  if(p.indexOf('ready')>=0){ f.brokerContacted=true; f.nseConversation=true; f.readyToQuote=true; }
+  else if(p.indexOf('nse')>=0){ f.brokerContacted=true; f.nseConversation=true; }
+  else if(p.indexOf('broker')>=0){ f.brokerContacted=true; }
+  f.status = f.readyToQuote?'4 - Ready to Quote':f.nseConversation?'3 - NSE Conversation':f.brokerContacted?'2 - Broker Outreach':'1 - No Communication';
+  return f;
+}
+/* "5 Shipments Yearly" / "4 Shipments Per Project" -> {volumeQty, volume} */
+function fcsvParseVolume(v){
+  v=(v||'').trim(); if(!v) return null;
+  const q=(v.match(/(\d+(?:\.\d+)?)/)||[])[1]||'';
+  let freq=v.replace(/\d+(?:\.\d+)?/,'').replace(/shipments?/i,'').trim();
+  freq=freq.replace(/^[·\-\s]+/,'').trim();
+  const known=(typeof OPP_VOLUMES!=='undefined')?OPP_VOLUMES:['Weekly','Monthly','Yearly','Per Project'];
+  const hit=known.find(k=>k.toLowerCase()===freq.toLowerCase());
+  if(hit) freq=hit;
+  if(!q && !freq) return null;
+  return { volumeQty:q, volume:freq };
+}
+function fcsvParseModes(v){ v=(v||'').trim(); if(!v) return []; return v.split(/\s*\|\s*/).map(s=>s.trim()).filter(Boolean); }
+function fcsvTier(t){ t=(t||'').trim(); const known=(typeof OPP_TIERS!=='undefined')?OPP_TIERS:[]; const hit=known.find(k=>k.toLowerCase()===t.toLowerCase()); return hit||t; }
+function fcsvDeal(d){ d=(d||'').trim(); const known=(typeof OPP_CLASS!=='undefined')?OPP_CLASS:[]; const hit=known.find(k=>k.toLowerCase()===d.toLowerCase()); return hit||''; }
+
+/* Build a funnel-opportunity record from one CSV row object */
+function fcsvRowToOpp(r){
+  const prog=fcsvProgToFields(r.progress);
+  const likeRaw=(r.likelihood||'').match(/\d+(?:\.\d+)?/);
+  const likelihood=likeRaw?likeRaw[0]:'';
+  const rec={
+    id:'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,8),
+    office:(r.office||'').trim(),
+    broker:(r.broker||'').trim(),
+    company:(r.company||'').trim(),
+    industry:(r.industry||'').trim(),
+    tier:fcsvTier(r.tier)||(likelihood?oppTierFromLike(likelihood):'Tier 3 - Medium'),
+    likelihood:likelihood,
+    equipment:(r.equipment||'').trim(),
+    notes:(r.notes||'').trim(),
+    classification:fcsvDeal(r.dealType),
+    relationship:(fcsvNorm(r.type)==='customer')?'Customer':'Prospect',
+    brokerContacted:prog.brokerContacted, nseConversation:prog.nseConversation, readyToQuote:prog.readyToQuote,
+    noOpp:prog.noOpp, status:prog.status, wonCustomer:false, notesLog:[]
+  };
+  const vol=fcsvParseVolume(r.volume); const modes=fcsvParseModes(r.modes);
+  if(vol || modes.length){
+    rec.intake={ volume:(vol&&vol.volume)||'', volumeQty:(vol&&vol.volumeQty)||'', modes:modes, needs:[], steps:[], savedAt:new Date().toISOString() };
+  }
+  return rec;
+}
+
+/* ---------- column mapping ---------- */
+function fcsvColMap(header){
+  const idx={}; header.forEach((h,i)=>{ idx[fcsvNorm(h).replace(/[^a-z0-9]/g,'')]=i; });
+  const pick=(...names)=>{ for(const n of names){ const k=n.replace(/[^a-z0-9]/g,''); if(idx[k]!=null) return idx[k]; } return -1; };
+  return {
+    company:pick('company','customer'), broker:pick('broker'), office:pick('office'),
+    industry:pick('industry'), tier:pick('tier'), likelihood:pick('likelihood','likely'),
+    progress:pick('progress','stage'), type:pick('type','relationship'),
+    dealType:pick('dealtype','classification'), volume:pick('volume'),
+    modes:pick('modes'), equipment:pick('equipment'), notes:pick('notes')
+  };
+}
+
+/* ---------- stage a CSV file (no writes) ---------- */
+function stageFunnelCsv(text, fileName){
+  const rows=parseCSV(text);
+  if(rows.length<2){ alert('That CSV looks empty.'); return; }
+  const map=fcsvColMap(rows[0]);
+  if(map.company<0){ alert('Could not find a "Company" column. Make sure this is the Office Summary Report CSV export.'); return; }
+  const g=(cols,k)=>{ const i=map[k]; return (i==null||i<0)?'':((cols[i]!=null?String(cols[i]):'').trim()); };
+
+  /* incoming rows -> opp records, de-duped within the file by company+office */
+  const incoming=[]; const seenIn=new Set();
+  for(let r=1;r<rows.length;r++){
+    const cols=rows[r];
+    const company=g(cols,'company'); if(!company) continue;
+    const office=g(cols,'office');
+    const key=fcsvKey(company,office);
+    if(seenIn.has(key)) continue;          /* same file duplicate — collapse */
+    seenIn.add(key);
+    incoming.push(fcsvRowToOpp({
+      company, office, broker:g(cols,'broker'), industry:g(cols,'industry'), tier:g(cols,'tier'),
+      likelihood:g(cols,'likelihood'), progress:g(cols,'progress'), type:g(cols,'type'),
+      dealType:g(cols,'dealType'), volume:g(cols,'volume'), modes:g(cols,'modes'),
+      equipment:g(cols,'equipment'), notes:g(cols,'notes')
+    }));
+  }
+
+  const existing=oppList();
+  const exByKey={}; existing.forEach(o=>{ exByKey[fcsvKey(o.company,o.office)]=o; });
+  const csvKeys=new Set(incoming.map(o=>fcsvKey(o.company,o.office)));
+  const officeSet=new Set(incoming.map(o=>fcsvNorm(o.office)).filter(Boolean));
+
+  const additions=[], duplicates=[];
+  incoming.forEach(o=>{ const k=fcsvKey(o.company,o.office);
+    if(exByKey[k]) duplicates.push({existing:exByKey[k], incoming:o}); else additions.push(o); });
+
+  /* removals: funnel opps whose office is represented in the CSV, but which the CSV no longer lists */
+  const removals=existing.filter(o=> officeSet.has(fcsvNorm(o.office)) && !csvKeys.has(fcsvKey(o.company,o.office)))
+    .map(o=>({o, _remove:false}));
+
+  FUNNEL_CSV={ fileName, additions, duplicates, removals,
+    offices:[...officeSet], officeLabels:[...new Set(incoming.map(o=>o.office).filter(Boolean))] };
+  showFunnelCsvReview();
+}
+
+/* ---------- review modal ---------- */
+function fcsvSetRemove(i, on){ if(FUNNEL_CSV && FUNNEL_CSV.removals[i]) FUNNEL_CSV.removals[i]._remove=!!on; }
+function fcsvRemoveAll(on){ if(!FUNNEL_CSV) return; FUNNEL_CSV.removals.forEach(x=>x._remove=!!on); showFunnelCsvReview(); }
+function showFunnelCsvReview(){
+  const F=FUNNEL_CSV; if(!F) return;
+  const box=document.getElementById('modalBox');
+  box.parentElement.querySelector('.modal').classList.remove('xwide'); box.parentElement.querySelector('.modal').classList.add('wide');
+  const offLbl=F.officeLabels.length?F.officeLabels.join(', '):'—';
+  const addRows=F.additions.slice(0,120).map(o=>`<tr>
+      <td><strong>${esc(o.company)}</strong><div style="font-size:11px;color:var(--muted)">${esc(o.industry||'')}</div></td>
+      <td>${esc(o.broker||'—')}</td><td>${esc(o.office||'—')}</td>
+      <td>${esc(o.tier||'')}</td><td style="text-align:center">${esc(o.likelihood||'—')}</td>
+    </tr>`).join('');
+  const dupRows=F.duplicates.slice(0,120).map(d=>`<tr>
+      <td><strong>${esc(d.incoming.company)}</strong></td><td>${esc(d.incoming.broker||'—')}</td>
+      <td>${esc(d.incoming.office||'—')}</td><td style="color:var(--muted)">Already in funnel — skipped</td>
+    </tr>`).join('');
+  const remCount=F.removals.filter(x=>x._remove).length;
+  const remRows=F.removals.map((x,i)=>`<tr style="${x._remove?'background:#fdeaea':''}">
+      <td style="text-align:center"><input type="checkbox" style="width:auto" ${x._remove?'checked':''} onchange="fcsvSetRemove(${i},this.checked)"></td>
+      <td><strong>${esc(x.o.company)}</strong><div style="font-size:11px;color:var(--muted)">${esc(x.o.industry||'')}</div></td>
+      <td>${esc(x.o.broker||'—')}</td><td>${esc(x.o.office||'—')}</td><td>${esc(x.o.tier||'')}</td>
+    </tr>`).join('');
+  box.innerHTML=`
+    <h3>📄 Prospect Funnel — CSV Import Review</h3>
+    <div class="card-sub" style="margin-bottom:14px">From <strong>${esc(F.fileName)}</strong> · Office(s): <strong>${esc(offLbl)}</strong>. Nothing is saved yet — review below, choose any removals, then click <strong>Approve Import</strong>. A backup is saved so you can Undo.</div>
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi b-green"><div class="bar"></div><div class="lbl">New — will be added</div><div class="val">${F.additions.length}</div></div>
+      <div class="kpi b-amber"><div class="bar"></div><div class="lbl">Duplicates — skipped</div><div class="val">${F.duplicates.length}</div></div>
+      <div class="kpi b-red"><div class="bar"></div><div class="lbl">Selected to remove</div><div class="val">${remCount}</div></div>
+      <div class="kpi b-navy"><div class="bar"></div><div class="lbl">Not in CSV (candidates)</div><div class="val">${F.removals.length}</div></div>
+    </div>
+    ${F.additions.length?`<div class="card"><div class="card-head"><h3>✅ New Opportunities (${F.additions.length})</h3><span class="tag">added on approve</span></div>
+      <div class="table-wrap"><table style="min-width:560px"><thead><tr><th>Company</th><th>Broker</th><th>Office</th><th>Tier</th><th>Likely</th></tr></thead><tbody>${addRows}</tbody></table></div>
+      ${F.additions.length>120?`<div style="font-size:12px;color:var(--muted);margin-top:6px">…and ${F.additions.length-120} more.</div>`:''}</div>`:''}
+    ${F.removals.length?`<div class="card"><div class="card-head"><h3>🗑️ In Funnel, Not in CSV (${F.removals.length})</h3>
+        <div style="display:flex;gap:8px"><button class="rowbtn" onclick="fcsvRemoveAll(true)">Select all</button><button class="rowbtn" onclick="fcsvRemoveAll(false)">Select none</button></div></div>
+      <div class="card-sub">These opportunities live in the office(s) covered by this CSV but weren't listed in it. Tick any you want to <strong>remove</strong> — left unchecked, they're kept.</div>
+      <div class="table-wrap"><table style="min-width:600px"><thead><tr><th style="width:40px">Remove</th><th>Company</th><th>Broker</th><th>Office</th><th>Tier</th></tr></thead><tbody>${remRows}</tbody></table></div></div>`:''}
+    ${F.duplicates.length?`<div class="card"><div class="card-head"><h3>♻ Duplicates — Not Added (${F.duplicates.length})</h3></div>
+      <div class="table-wrap"><table style="min-width:520px"><thead><tr><th>Company</th><th>Broker</th><th>Office</th><th>Status</th></tr></thead><tbody>${dupRows}</tbody></table></div>
+      ${F.duplicates.length>120?`<div style="font-size:12px;color:var(--muted);margin-top:6px">…and ${F.duplicates.length-120} more.</div>`:''}</div>`:''}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="width:auto" onclick="approveFunnelCsv()">✓ Approve Import</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+
+/* ---------- approve: write staged changes ---------- */
+function approveFunnelCsv(){
+  const F=FUNNEL_CSV; if(!F) return;
+  try{ localStorage.setItem('hht_preImportBackup', JSON.stringify(snapshot())); }catch(e){}
+  let opps=oppList();
+  /* removals first */
+  const removeIds=new Set(F.removals.filter(x=>x._remove).map(x=>x.o.id));
+  const removed=removeIds.size;
+  if(removed) opps=opps.filter(o=>!removeIds.has(o.id));
+  /* additions */
+  F.additions.forEach(o=>opps.push(o));
+  oppSave(opps);
+  /* union funnel offices so new offices show up in filters */
+  if(typeof DB.oppOffices==='function'){
+    const offSet=new Set(DB.oppOffices()||[]);
+    F.officeLabels.forEach(o=>{ if(o) offSet.add(o); });
+    DB.saveOppOffices(Array.from(offSet));
+  }
+  /* record last-import so the Import Center card + Undo reflect it */
+  IMPORT_LAST={ when:new Date().toISOString(), files:[{fileName:F.fileName, added:F.additions.length, updated:0, duplicates:F.duplicates.length, aux:0}],
+    added:F.additions.length, updated:0, skipped:F.duplicates.length, removed, aux:{}, auxSum:0, errors:[], kind:'funnelCsv' };
+  try{ localStorage.setItem('hht_lastImport', JSON.stringify(IMPORT_LAST)); }catch(e){}
+  const added=F.additions.length, skipped=F.duplicates.length;
+  FUNNEL_CSV=null; closeModal();
+  if(typeof go==='function') go('funnel'); else route();
+  toast(`Funnel CSV imported — ${added} added, ${skipped} duplicate(s) skipped${removed?`, ${removed} removed`:''}`);
+}
+
+/* ---------- hidden file input + trigger ---------- */
+(function ensureFunnelCsvInput(){
+  if(document.getElementById('importFunnelCsvFile')) return;
+  const inp=document.createElement('input');
+  inp.type='file'; inp.id='importFunnelCsvFile'; inp.accept='.csv,text/csv'; inp.className='hidden';
+  document.body.appendChild(inp);
+  inp.addEventListener('change', function(e){
+    const f=e.target.files[0]; this.value=''; if(!f) return;
+    const r=new FileReader();
+    r.onload=()=>{ try{ stageFunnelCsv(r.result, f.name); }catch(err){ console.error(err); alert('Could not read that CSV. ('+err.message+')'); } };
+    r.readAsText(f);
+  });
+})();
+function importFunnelCsv(){ const el=document.getElementById('importFunnelCsvFile'); if(el) el.click(); }
+
+/* ---------- inject a card into the Import Center page ---------- */
+if(typeof window.pageImportCenter==='function'){
+  const _pic=window.pageImportCenter;
+  window.pageImportCenter=function(){
+    let html=_pic();
+    const card=`
+    <div class="card" style="border-left:4px solid var(--accent)">
+      <div class="card-head"><h3>🧲 Prospect Funnel — CSV Import</h3><span class="tag">Office Summary Report format</span></div>
+      <div class="card-sub">Upload a <strong>Prospect Funnel CSV</strong> (the same columns the <strong>Office Summary Report</strong> exports: Company, Broker, Office, Industry, Tier, Likelihood, Progress, Type, Deal Type, Volume, Modes, Equipment, Notes). It follows the same review rules as the JSON import — it shows what will be <strong>added</strong>, what are <strong>duplicates</strong> (matched on company + office, and <strong>not</strong> re-added), and any funnel opps in the file's office(s) that are <strong>not in the CSV</strong> so you can optionally remove them. Nothing is written until you approve, and Undo restores it.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="width:auto" onclick="importFunnelCsv()">⬆ Choose Funnel CSV</button>
+        <button class="btn btn-ghost" style="width:auto" onclick="go('funnel')">Open Prospect Funnel →</button>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+        Recognized columns: ${['Company','Broker','Office','Industry','Tier','Likelihood','Progress','Type','Deal Type','Volume','Modes','Equipment','Notes'].map(c=>`<span class="tag" style="margin-bottom:4px">${c}</span>`).join(' ')}
+      </div>
+    </div>`;
+    /* place the new card right after the page sub-heading, before the JSON card */
+    const anchor='<div class="card">\n    <div class="card-head"><h3>Bulk JSON Upload</h3></div>';
+    if(html.indexOf(anchor)>=0) return html.replace(anchor, card+'\n  '+anchor);
+    const anchor2='<div class="card">';
+    const at=html.indexOf(anchor2);
+    if(at>=0) return html.slice(0,at)+card+'\n  '+html.slice(at);
+    return html+card;
+  };
+}
+
+/* expose inline handlers */
+window.importFunnelCsv=importFunnelCsv; window.stageFunnelCsv=stageFunnelCsv;
+window.showFunnelCsvReview=showFunnelCsvReview; window.approveFunnelCsv=approveFunnelCsv;
+window.fcsvSetRemove=fcsvSetRemove; window.fcsvRemoveAll=fcsvRemoveAll;
+
+try{ if(CURRENT_PAGE==='importcenter' && typeof route==='function') route(); }catch(e){}
+</script>
+
 </body>
 </html>
