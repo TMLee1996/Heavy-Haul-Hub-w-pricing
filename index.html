@@ -8618,7 +8618,7 @@ function withScopedRoster(fn){
    OFFICES + REPS (list sources)
    ========================================================= */
 const _oppOfficeList=oppOfficeList;
-oppOfficeList=function(){ let l=_oppOfficeList(); if(nseScoped()){ const s=activeOfficeSet(); l=l.filter(o=>s.has(o)); } return l; };
+oppOfficeList=function(){ let l=_oppOfficeList(); if(nseScoped()){ const s=activeOfficeSet(); (DB.oppOffices()||[]).forEach(o=>{ if(o) s.add(o); }); l=l.filter(o=>s.has(o)); } return l; };
 
 const _oppBrokerList=oppBrokerList;
 oppBrokerList=function(){ if(!nseScoped()) return _oppBrokerList();
