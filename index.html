@@ -8618,7 +8618,7 @@ function withScopedRoster(fn){
    OFFICES + REPS (list sources)
    ========================================================= */
 const _oppOfficeList=oppOfficeList;
-oppOfficeList=function(){ let l=_oppOfficeList(); if(nseScoped()){ const s=activeOfficeSet(); (DB.oppOffices()||[]).forEach(o=>{ if(o) s.add(o); }); l=l.filter(o=>s.has(o)); } return l; };
+oppOfficeList=function(){ let l=_oppOfficeList(); if(nseScoped()){ const s=activeOfficeSet(); l=l.filter(o=>s.has(o)); } return l; };
 
 const _oppBrokerList=oppBrokerList;
 oppBrokerList=function(){ if(!nseScoped()) return _oppBrokerList();
@@ -10280,6 +10280,749 @@ window.pageCustomerOpps = function(){
 window.tcChartData=tcChartData; window.tcMultiLineSVG=tcMultiLineSVG; window.tcHBarSVG=tcHBarSVG; window.tcGrowthCard=tcGrowthCard;
 
 try{ if(typeof route==='function' && CURRENT_PAGE==='custopps') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   MANUAL PROJECT START  —  no packing list required
+   =================================================================== */
+
+/* ---- build a blank project shell that satisfies pcSyncActiveSheet ---- */
+function pcBlankProject(name){
+  return {
+    id: pcUID('prj'),
+    name: name || 'New Project',
+    contract:'', origin:'', destination:'',
+    createdAt:new Date().toISOString(),
+    sourceSheet:'Manual Entry',
+    dimUnit:'in', wtUnit:'lbs',
+    rep:(typeof PC_REP!=='undefined' && PC_REP && PC_REP!=='all')?PC_REP:'',
+    lost:false, awarded:false, manual:true,
+    pkgSheets:[{ name:'Manual Entry', packages:[], trucks:[], totalWeight:0, dimUnit:'in', wtUnit:'lbs', laneId:'base', laneLabel:'' }],
+    activeSheet:0,
+    services:{ drayage:[], transloading:[], craneRigging:[] }
+  };
+}
+
+/* ---- rep dropdown for the modal ---- */
+function pcManualRepOptions(sel){
+  const reps=DB.reps()||[];
+  return ['<option value="">— unassigned —</option>']
+    .concat(reps.map(r=>`<option value="${r.u}" ${sel===r.u?'selected':''}>${esc(r.name)}${r.role==='ART'?' (ART)':''}</option>`))
+    .join('');
+}
+
+/* ---- modal ---- */
+function pcOpenManualProject(){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('xwide'); modal.classList.add('wide');
+  const defRep=(typeof PC_REP!=='undefined' && PC_REP && PC_REP!=='all' && PC_REP!=='__un')?PC_REP:'';
+  box.innerHTML=`<h3>🏗️ Start a Project Manually</h3>
+    <div class="card-sub" style="margin-bottom:14px">No packing list needed. Create the project shell now — add trucks, drayage containers, transloading and specialized services by hand, then build the customer summary exactly like an uploaded project. You can still add a packing-list page later with <strong>＋ Add Page to Lane</strong>.</div>
+    <div class="form-row">
+      <div class="field-c" style="grid-column:1/-1"><label>Project Name</label>
+        <input id="mp_name" placeholder="e.g. Bloom Energy — Lancaster PA" onkeydown="if(event.key==='Enter')pcCreateManualProject()"></div>
+    </div>
+    <div class="form-row">
+      <div class="field-c"><label>Contract / Reference</label><input id="mp_contract" placeholder="e.g. AEP005"></div>
+      <div class="field-c"><label>Owner (Rep)</label><select id="mp_rep">${pcManualRepOptions(defRep)}</select></div>
+    </div>
+    <div class="form-row">
+      <div class="field-c"><label>Lane Origin</label><input id="mp_origin" placeholder="Pickup city, ST"></div>
+      <div class="field-c"><label>Lane Destination</label><input id="mp_dest" placeholder="Delivery city, ST"></div>
+    </div>
+    <div style="border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:4px">
+      <div style="font-weight:700;color:var(--ink);margin-bottom:8px">Starting Trucks <span style="font-weight:500;color:var(--muted);font-size:12px">— optional, you can add or remove more later</span></div>
+      <div class="form-row">
+        <div class="field-c"><label>How Many</label><input id="mp_truckqty" type="number" min="0" max="60" value="0" placeholder="0"></div>
+        <div class="field-c"><label>Trailer Type</label><select id="mp_trucktype">
+          ${['Flatbed','Stepdeck','Double Drop'].map(t=>`<option>${t}</option>`).join('')}
+        </select></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="width:auto" onclick="pcCreateManualProject()">Create Project</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+  setTimeout(()=>{ const el=document.getElementById('mp_name'); if(el) el.focus(); },40);
+}
+
+/* ---- create + open ---- */
+function pcCreateManualProject(){
+  const name=val('mp_name');
+  if(!name){ toast('Give the project a name'); return; }
+
+  const p=pcBlankProject(name);
+  p.contract=val('mp_contract');
+  p.rep=val('mp_rep')||'';
+  p.origin=val('mp_origin');
+  p.destination=val('mp_dest');
+
+  /* optional starting trucks — same shape pcBuildTrucks produces, flagged manual */
+  const qty=Math.max(0, Math.min(60, parseInt(val('mp_truckqty'))||0));
+  const type=val('mp_trucktype')||'Flatbed';
+  const lane=pcLaneLabelFrom(p.origin,p.destination);
+  for(let i=1;i<=qty;i++){
+    p.pkgSheets[0].trucks.push({
+      id:'M'+i, type:type, manual:true, items:[], usedLen:0, weight:0, maxW:0, maxH:0, loadedH:0,
+      flags:[], rate:'', lane:lane, pickupDate:'', deliveryDate:'', loaded:false, delivered:false
+    });
+  }
+
+  pcEnsureLanes(p);
+  const base=(p.lanes||[]).find(l=>l.id==='base');
+  if(base){ base.origin=p.origin; base.destination=p.destination; base.label=lane||'Base Lane'; }
+  pcSyncActiveSheet(p);
+
+  const all=DB.projects(); all.unshift(p); DB.saveProjects(all);
+  closeModal();
+  PC_OPEN=p.id; PC_SUM_OPEN=null;
+  go('projectcenter'); window.scrollTo(0,0);
+  toast('Project created'+(qty?(' with '+qty+' '+type+' truck'+(qty>1?'s':'')):' — add trucks & services as you go'));
+}
+
+/* ---- inject the button into the Project Center list page ---- */
+(function(){
+  if(typeof window.pageProjectCenter!=='function') return;
+  const _pc=window.pageProjectCenter;
+  window.pageProjectCenter=function(){
+    let html=_pc();
+    /* only decorate the LIST page (detail + summary builder render their own markup) */
+    const anchor='<button class="btn btn-primary" style="width:auto" onclick="pcUpload()">';
+    const i=html.indexOf(anchor);
+    if(i<0) return html;
+
+    const manualCard=`
+  <div class="card" style="border-left:4px solid var(--accent)">
+    <div class="card-head"><h3>Start a Project Manually</h3><span class="tag">no packing list needed</span></div>
+    <div class="card-sub">Kick off a project without an Excel packing list — name it, set the lane and owner, then add trucks, containers and specialized services by hand. You can attach a packing-list page later at any time.</div>
+    <button class="btn btn-primary" style="width:auto" onclick="pcOpenManualProject()">＋ New Manual Project</button>
+  </div>`;
+
+    /* place the manual card right after the Excel-upload card */
+    const cardEnd=html.indexOf('</div>', html.indexOf('</button>', i));
+    if(cardEnd<0) return html;
+    return html.slice(0, cardEnd+6) + manualCard + html.slice(cardEnd+6);
+  };
+})();
+
+/* expose for inline handlers */
+window.pcOpenManualProject=pcOpenManualProject;
+window.pcCreateManualProject=pcCreateManualProject;
+window.pcBlankProject=pcBlankProject;
+
+try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   TRAILER SPEC TABLE  —  drives all automatic truck building
+   Heights below are MAX CARGO HEIGHT from the restriction table.
+   =================================================================== */
+const TRAILER_SPECS = [
+  /* name                        L(in)   W(in) H(in)  single   multi   deckH  prefix */
+  {name:'Flatbed',                  len:53*12, maxW:102, maxH:102, single:50000, multi:47000, deckH:60, pre:'FB'},
+  {name:'Tri-Axle Flatbed',         len:53*12, maxW:102, maxH:102, single:60000, multi:42000, deckH:60, pre:'TFB'},
+  {name:'Tri-Axle Stretch Flatbed', len:70*12, maxW:102, maxH:102, single:60000, multi:40000, deckH:60, pre:'TSF'},
+  {name:'Stepdeck',                 len:53*12, maxW:102, maxH:120, single:50000, multi:47000, deckH:40, pre:'SD'},
+  {name:'Standard RGN',             len:29*12, maxW:102, maxH:138, single:50000, multi:40000, deckH:24, pre:'RGN'},
+  {name:'6-Axle RGN',               len:29*12, maxW:102, maxH:138, single:60000, multi:38000, deckH:24, pre:'R6'},
+  {name:'7-Axle RGN',               len:29*12, maxW:102, maxH:138, single:70000, multi:36000, deckH:24, pre:'R7'},
+  {name:'8-Axle RGN',               len:29*12, maxW:102, maxH:138, single:80000, multi:34000, deckH:24, pre:'R8'},
+  {name:'6-Axle Stretch RGN',       len:50*12, maxW:102, maxH:138, single:60000, multi:36000, deckH:24, pre:'SR6'},
+  {name:'7-Axle Stretch RGN',       len:50*12, maxW:102, maxH:138, single:70000, multi:34000, deckH:24, pre:'SR7'},
+  {name:'8-Axle Stretch RGN',       len:50*12, maxW:102, maxH:138, single:80000, multi:32000, deckH:24, pre:'SR8'},
+  {name:'6-Axle Super Stretch RGN', len:60*12, maxW:102, maxH:138, single:60000, multi:32000, deckH:24, pre:'SS6'},
+  {name:'7-Axle Super Stretch RGN', len:60*12, maxW:102, maxH:138, single:70000, multi:30000, deckH:24, pre:'SS7'},
+  {name:'8-Axle Super Stretch RGN', len:60*12, maxW:102, maxH:138, single:80000, multi:28000, deckH:24, pre:'SS8'}
+];
+const TRAILER_NAMES = TRAILER_SPECS.map(t=>t.name);
+function trailerSpec(name){ return TRAILER_SPECS.find(t=>t.name===name) || null; }
+
+/* keep the legacy PC_TRUCKS lookup alive for any older code paths */
+TRAILER_SPECS.forEach(t=>{ PC_TRUCKS[t.name] = {deckLen:t.len, deckH:t.deckH, cap:t.single}; });
+
+/* absolute ceilings — anything past these gets a BLANK trailer type */
+const TRAILER_MAX_SINGLE = Math.max(...TRAILER_SPECS.map(t=>t.single));   /* 80,000 */
+const TRAILER_MAX_LEN    = Math.max(...TRAILER_SPECS.map(t=>t.len));      /* 60'    */
+const TRAILER_MAX_H      = Math.max(...TRAILER_SPECS.map(t=>t.maxH));     /* 11'6"  */
+
+/* ===================================================================
+   PIECE -> TRAILER SELECTION
+   Walk the table top-down (least to most specialized) and take the
+   first trailer that legally carries the piece. Over-width is allowed
+   (permit) and flagged; over-weight / over-height / over-length past
+   every trailer returns null -> blank type for the rep.
+   =================================================================== */
+function pcPickTrailer(p){
+  const L=p.L||0, W=p.W||0, H=p.H||0, wt=p.weight||0;
+  for(const t of TRAILER_SPECS){
+    if(H > t.maxH) continue;
+    if(L > t.len) continue;
+    if(wt > t.single) continue;
+    return t;
+  }
+  return null;
+}
+
+/* recompute a truck's derived numbers + flags against its current type */
+function pcRecalcTruck(t){
+  const spec=trailerSpec(t.type);
+  t.usedLen = (t.items||[]).reduce((s,p)=>s+(p.L||0),0);
+  t.weight  = (t.items||[]).reduce((s,p)=>s+(p.weight||0),0);
+  t.maxW    = (t.items||[]).reduce((m,p)=>Math.max(m,p.W||0),0);
+  t.maxH    = (t.items||[]).reduce((m,p)=>Math.max(m,p.H||0),0);
+  t.flags   = [];
+  if(!spec){
+    t.loadedH = t.maxH;
+    if(t.type==='' || t.type==null) t.flags.push('Trailer TBD');
+    return t;
+  }
+  t.loadedH = spec.deckH + t.maxH;
+  const n=(t.items||[]).length;
+  const cap = n>1 ? spec.multi : spec.single;
+  if(t.maxW > spec.maxW)        t.flags.push('Over-width');
+  if(t.maxH > spec.maxH)        t.flags.push('Over-height');
+  if(t.usedLen > spec.len)      t.flags.push('Over-length');
+  if(t.weight > cap)            t.flags.push('Over-weight');
+  return t;
+}
+
+/* ===================================================================
+   TRUCK BUILDER  (replaces the old height-bucket logic)
+   =================================================================== */
+function pcBuildTrucks(packages){
+  const pieces=[];
+  (packages||[]).forEach(p=>{
+    const q=Math.max(1, parseInt(p.qty)||1);
+    for(let i=0;i<q;i++) pieces.push({pkg:p.pkg, desc:p.desc, weight:p.weight||0, L:p.L||0, W:p.W||0, H:p.H||0});
+  });
+
+  /* bucket every piece by the trailer it needs (null bucket = rep decides) */
+  const buckets=new Map();            /* specName -> pieces[] */
+  const unplaced=[];
+  pieces.forEach(p=>{
+    const spec=pcPickTrailer(p);
+    if(!spec){ unplaced.push(p); return; }
+    if(!buckets.has(spec.name)) buckets.set(spec.name, []);
+    buckets.get(spec.name).push(p);
+  });
+
+  const trucks=[]; const cnt={};
+  const newTruck=(spec)=>{
+    cnt[spec.name]=(cnt[spec.name]||0)+1;
+    const t={ id:spec.pre+cnt[spec.name], type:spec.name, items:[], usedLen:0, weight:0,
+      maxW:0, maxH:0, loadedH:0, flags:[], rate:'', lane:'', pickupDate:'', deliveryDate:'', loaded:false, delivered:false };
+    trucks.push(t); return t;
+  };
+
+  /* pack each bucket: heaviest/longest first, respecting single vs multi caps */
+  TRAILER_SPECS.forEach(spec=>{
+    const list=buckets.get(spec.name); if(!list || !list.length) return;
+    list.sort((a,b)=>(b.weight||0)-(a.weight||0) || (b.L||0)-(a.L||0));
+    let cur=null;
+    list.forEach(p=>{
+      let fits=false;
+      if(cur){
+        const n=cur.items.length+1;
+        const cap = n>1 ? spec.multi : spec.single;
+        fits = (cur.usedLen + (p.L||0) <= spec.len) && (cur.weight + (p.weight||0) <= cap);
+      }
+      if(!fits) cur=newTruck(spec);
+      cur.items.push(p); cur.usedLen+=(p.L||0); cur.weight+=(p.weight||0);
+      cur.maxW=Math.max(cur.maxW,p.W||0); cur.maxH=Math.max(cur.maxH,p.H||0);
+    });
+  });
+
+  /* anything past every trailer's limits -> its own truck, blank type */
+  let u=0;
+  unplaced.forEach(p=>{
+    u++;
+    const t={ id:'TBD'+u, type:'', items:[p], usedLen:(p.L||0), weight:(p.weight||0),
+      maxW:(p.W||0), maxH:(p.H||0), loadedH:(p.H||0), flags:[], rate:'', needsType:true,
+      lane:'', pickupDate:'', deliveryDate:'', loaded:false, delivered:false };
+    trucks.push(t);
+  });
+
+  trucks.forEach(pcRecalcTruck);
+  /* re-flag the TBD trucks with the reason so the rep knows what drove it */
+  trucks.forEach(t=>{ if(!t.type){
+    t.needsType=true; t.flags=['Trailer TBD'];
+    if((t.weight||0) > TRAILER_MAX_SINGLE) t.flags.push('Over max weight');
+    if((t.maxH||0)   > TRAILER_MAX_H)      t.flags.push('Over max height');
+    if((t.usedLen||0)> TRAILER_MAX_LEN)    t.flags.push('Over max length');
+    if((t.maxW||0)   > 102)                t.flags.push('Over-width');
+  }});
+  return trucks;
+}
+
+/* ===================================================================
+   TYPE OVERRIDE HANDLERS
+   =================================================================== */
+function pcTrailerOptions(sel){
+  const opts=[`<option value="" ${!sel?'selected':''}>— select trailer —</option>`]
+    .concat(TRAILER_NAMES.map(n=>`<option ${sel===n?'selected':''}>${n}</option>`));
+  if(sel && TRAILER_NAMES.indexOf(sel)<0) opts.splice(1,0,`<option selected>${esc(sel)}</option>`);
+  return opts.join('');
+}
+
+/* single truck */
+function pcSetTruckType(id, truckId, value){
+  const p=pcProject(id); if(!p) return;
+  const t=(p.trucks||[]).find(x=>x.id===truckId); if(!t) return;
+  t.type=value||''; t.needsType=!t.type;
+  pcRecalcTruck(t);
+  if(!t.type) t.flags=['Trailer TBD'];
+  pcSaveProject(p); route(); toast(value?('Set to '+value):'Trailer type cleared');
+}
+
+/* whole group in the Truck Type Summary — every truck sharing this
+   type + over-dimension profile (i.e. the same dimensional group) */
+function pcApplyGroupType(id, type, ow, oh, newType){
+  const p=pcProject(id); if(!p) return;
+  ow=!!ow; oh=!!oh;
+  if(!newType){ toast('Pick a trailer type first'); return; }
+  let n=0;
+  (p.trucks||[]).forEach(t=>{
+    const fl=Array.isArray(t.flags)?t.flags:[];
+    const tow=fl.indexOf('Over-width')>=0, toh=fl.indexOf('Over-height')>=0;
+    if((t.type||'')===type && tow===ow && toh===oh){
+      t.type=newType; t.needsType=false; pcRecalcTruck(t); n++;
+    }
+  });
+  pcSaveProject(p); route();
+  toast('Changed '+n+' truck'+(n===1?'':'s')+' to '+newType);
+}
+
+/* manual-truck add now uses the real trailer list */
+function pcTruckAdd(id){
+  const p=pcProject(id); if(!p) return;
+  const trucks=p.trucks||(p.trucks=[]);
+  let k=1; while(trucks.some(t=>t.id==='M'+k)) k++;
+  trucks.push({ id:'M'+k, type:'Flatbed', manual:true, items:[], usedLen:0, weight:0, maxW:0, maxH:0,
+    loadedH:0, flags:[], rate:'', lane:'', pickupDate:'', deliveryDate:'', loaded:false, delivered:false });
+  pcSaveProject(p); route(); toast('Manual truck M'+k+' added');
+}
+
+/* ===================================================================
+   TRUCK BREAKDOWN + TYPE SUMMARY  (quoting stage)
+   =================================================================== */
+function pcTrucksBody(p){
+  if(p.awarded) return pcTrucksTrackBody(p);
+
+  const needCount=(p.trucks||[]).filter(t=>!t.type).length;
+  const banner = needCount ? `<div class="alert-box danger">
+      <h4>⚠️ Trailer Type Needed <span class="age-badge">${needCount}</span></h4>
+      <div class="a-sub">These pieces exceed every trailer's published limit (weight over ${TRAILER_MAX_SINGLE.toLocaleString()} lbs, height over 11'6", or length over 60'). Pick the trailer yourself in the <strong>Type</strong> column below.</div>
+    </div>` : '';
+
+  const truckRows=(p.trucks||[]).map(t=>{
+    const spec=trailerSpec(t.type);
+    const manual=!!t.manual;
+    const n=(t.items||[]).length;
+    const cap = spec ? (n>1 ? spec.multi : spec.single) : null;
+    const flags=(t.flags&&t.flags.length)?`<div style="margin-top:3px">${t.flags.map(f=>`<span class="pill ${f==='Trailer TBD'?'pending':'loss'}">${f}</span>`).join(' ')}</div>`:'';
+    const typeCell = `<select class="mini-input" style="min-width:170px;${!t.type?'border-color:var(--red);background:#fdf0ef':''}" onchange="pcSetTruckType('${p.id}','${t.id}',this.value)">${pcTrailerOptions(t.type)}</select>${manual?' <span class="pill vol">manual</span>':''}${flags}`;
+    const pkgs = manual && !n ? '\u2014' : n;
+    const lenU = spec ? `${inchesToFtIn(t.usedLen)} <span style="color:var(--muted);font-size:11px">/ ${inchesToFtIn(spec.len)}</span>` : inchesToFtIn(t.usedLen||0);
+    const mw = inchesToFtIn(t.maxW||0);
+    const mh = spec ? `${inchesToFtIn(t.maxH)} <span style="color:var(--muted);font-size:11px">(load ${inchesToFtIn(t.loadedH)})</span>` : inchesToFtIn(t.maxH||0);
+    const wtCol = cap && (t.weight||0)>cap ? 'var(--red)' : 'inherit';
+    const wt = `<span style="color:${wtCol};font-weight:${wtCol==='inherit'?'400':'700'}">${Math.round(t.weight||0).toLocaleString()} lbs</span>${cap?`<div style="font-size:11px;color:var(--muted)">cap ${cap.toLocaleString()} (${n>1?'multi':'single'})</div>`:''}`;
+    return `<tr${!t.type?' style="background:#fdf0ef"':''}>
+      <td><strong>${t.id}</strong></td>
+      <td>${typeCell}</td>
+      <td>${pkgs}</td>
+      <td>${lenU}</td>
+      <td>${mw}</td>
+      <td>${mh}</td>
+      <td>${wt}</td>
+      <td><div style="display:flex;align-items:center;gap:4px">
+        <span style="color:var(--muted)">$</span>
+        <input type="number" min="0" step="0.01" class="mini-num" style="width:96px" value="${t.rate!==''&&t.rate!=null?t.rate:''}" placeholder="0.00" onchange="pcSetTruckRate('${p.id}','${t.id}',this.value)">
+        <button class="rowbtn" title="Copy this rate to all ${esc(t.type||'same-type')} trucks" onclick="pcCopyRateToType('${p.id}','${t.id}')">\u2398 type</button>
+      </div></td>
+      <td>${manual?`<button class="rowbtn del" title="Remove manual truck" onclick="pcTruckDel('${p.id}','${t.id}')">\u2715</button>`:''}</td>
+    </tr>`;
+  }).join('');
+
+  const typeSum=pcTypeSummary(p).map(s=>{
+    const uniform = s.rates.size===1 ? [...s.rates][0] : '';
+    const inputId=pcTruckGroupSan(s.type,s.ow,s.oh);
+    const typeId='ty-'+inputId;
+    const flagPills=(s.ow?'<span class="pill loss" style="margin-left:4px">Over-width</span>':'')+(s.oh?'<span class="pill loss" style="margin-left:4px">Over-height</span>':'');
+    const label = s.type ? `<span class="pill type">${esc(s.type)}</span>` : `<span class="pill pending">Trailer TBD</span>`;
+    return `<tr${!s.type?' style="background:#fdf0ef"':''}>
+      <td>${label}${flagPills}</td>
+      <td>${s.qty}</td>
+      <td>${inchesToFtIn(s.len)}</td>
+      <td>${inchesToFtIn(s.maxW)}</td>
+      <td>${inchesToFtIn(s.maxH)} <span style="color:var(--muted);font-size:11px">(load ${inchesToFtIn(s.loadedH)})</span></td>
+      <td><div style="display:flex;gap:5px;align-items:center">
+        <select class="mini-input" id="${typeId}" style="min-width:165px">${pcTrailerOptions(s.type)}</select>
+        <button class="rowbtn" style="background:#eef2f8;color:var(--accent2)" title="Apply this trailer type to all ${s.qty} truck(s) in this group" onclick="pcApplyGroupType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0},document.getElementById('${typeId}').value)">Change all ${s.qty}</button>
+      </div></td>
+      <td>${s.amount?pcMoney(s.amount):'\u2014'}</td>
+      <td><div class="copy-rate-wrap"><span style="color:var(--muted)">$</span>
+        <input type="number" min="0" step="0.01" class="mini-num" id="${inputId}" value="${uniform!==''?uniform:''}" placeholder="rate / truck">
+        <button class="rowbtn" onclick="pcApplyGroupRate('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">Apply to all ${s.qty}</button>
+        <button class="rowbtn" style="background:#e3f6e9;color:var(--green)" title="Use the pricing tool to price one truck, then apply to all ${s.qty}" onclick="openGetPriceTruckType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">💲 Pricing Tool</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    ${banner}
+    <div class="card-sub">Trucks are built straight off the trailer restriction table — height sets the deck (Flatbed \u2264 8'6", Stepdeck \u2264 10', RGN \u2264 11'6"), length and axle count set the trailer, and weight is checked against the <strong>single-piece</strong> limit for solo loads and the <strong>multiple-piece</strong> limit once a second piece is added. Anything past every trailer's limits is left <strong>blank</strong> for you to choose. Change a type on any row, or change a whole group in the summary below.</div>
+    <div class="table-wrap"><table style="min-width:1020px">
+      <thead><tr><th>Truck</th><th style="width:190px">Type</th><th>Pkgs</th><th>Length Used</th><th>Max W</th><th>Max H</th><th>Weight</th><th style="width:230px">Rate / Truck</th><th></th></tr></thead>
+      <tbody>${truckRows||'<tr><td colspan="9" class="empty">No trucks.</td></tr>'}</tbody>
+    </table></div>
+    <div style="text-align:right;margin-top:10px;font-weight:700;color:var(--ink)">Truck Subtotal (this page): ${pcMoney(pcTruckSubtotalPage(p))}</div>
+    <div style="margin-top:16px"><h3 style="font-size:14px;color:var(--ink);margin-bottom:8px">Truck Type Summary &amp; Quick Pricing</h3>
+      <div class="card-sub" style="margin:0 0 8px">Each row groups trucks with the same trailer type and over-dimension profile. Use <strong>Change all</strong> to switch that entire group to a different trailer \u2014 every truck sharing those dimensions updates together.</div>
+      <div class="table-wrap"><table style="min-width:900px">
+        <thead><tr><th>Type</th><th># Trucks</th><th>Total Length</th><th>Max W</th><th>Max H</th><th style="width:290px">Change Trailer Type</th><th>Amount</th><th>Copy Rate to Group</th></tr></thead>
+        <tbody>${typeSum||'<tr><td colspan="8" class="empty">\u2014</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+}
+
+/* summary grouping must keep blank-type groups and order the new trailers */
+function pcTypeSummary(p){
+  const order={}; TRAILER_NAMES.forEach((n,i)=>order[n]=i);
+  const map={};
+  (p.trucks||[]).forEach(t=>{
+    const fl=Array.isArray(t.flags)?t.flags:[];
+    const ow=fl.indexOf('Over-width')>=0, oh=fl.indexOf('Over-height')>=0;
+    const key=pcTruckGroupKey(t);
+    const g=(map[key]=map[key]||{key,type:t.type||'',ow,oh,qty:0,len:0,maxW:0,maxH:0,loadedH:0,amount:0,rates:new Set()});
+    g.qty++; g.len+=(t.usedLen||0); g.maxW=Math.max(g.maxW,t.maxW||0);
+    g.maxH=Math.max(g.maxH,t.maxH||0); g.loadedH=Math.max(g.loadedH,t.loadedH||0);
+    g.amount+=(Number(t.rate)||0); if(t.rate!==''&&t.rate!=null) g.rates.add(Number(t.rate));
+  });
+  return Object.values(map).sort((a,b)=>{
+    if(!a.type && b.type) return 1; if(a.type && !b.type) return -1;
+    const oa=order[a.type]==null?99:order[a.type], ob=order[b.type]==null?99:order[b.type];
+    if(oa!==ob) return oa-ob;
+    return (a.ow===b.ow)?((a.oh===b.oh)?0:(a.oh?1:-1)):(a.ow?1:-1);
+  });
+}
+
+/* the all-pages view's grouping needs the same ordering */
+function pcTypeSummaryAll(p){
+  const order={}; TRAILER_NAMES.forEach((n,i)=>order[n]=i);
+  const map={};
+  pcAllTrucks(p).forEach(t=>{
+    const fl=Array.isArray(t.flags)?t.flags:[];
+    const ow=fl.indexOf('Over-width')>=0, oh=fl.indexOf('Over-height')>=0, ol=fl.indexOf('Over-length')>=0;
+    const key=(t.type||'TBD')+(ow?'|OW':'')+(oh?'|OH':'')+(ol?'|OL':'');
+    const g=(map[key]=map[key]||{key,type:t.type||'',ow,oh,ol,qty:0,amount:0,rates:new Set()});
+    g.qty++; g.amount+=(Number(t.rate)||0); if(t.rate!==''&&t.rate!=null) g.rates.add(Number(t.rate));
+  });
+  return Object.values(map).sort((a,b)=>{
+    if(!a.type && b.type) return 1; if(a.type && !b.type) return -1;
+    const oa=order[a.type]==null?99:order[a.type], ob=order[b.type]==null?99:order[b.type];
+    if(oa!==ob) return oa-ob;
+    return (a.ow===b.ow)?((a.oh===b.oh)?((a.ol===b.ol)?0:(a.ol?1:-1)):(a.oh?1:-1)):(a.ow?1:-1);
+  });
+}
+
+/* live-tracking rows should show the trailer type as editable too */
+function pcTruckType(id,truckId,value){ pcSetTruckType(id,truckId,value); }
+
+/* map a Project Center truck type to a pricing-tool trailer */
+if(typeof window.openGetPriceTruckType==='function'){
+  const _gp=window.openGetPriceTruckType;
+  window.openGetPriceTruckType=function(projId,type,ow,oh){
+    if(!type){ toast('Pick a trailer type for this group first'); return; }
+    return _gp(projId,type,ow,oh);
+  };
+}
+
+/* expose */
+window.TRAILER_SPECS=TRAILER_SPECS; window.TRAILER_NAMES=TRAILER_NAMES;
+window.trailerSpec=trailerSpec; window.pcPickTrailer=pcPickTrailer; window.pcRecalcTruck=pcRecalcTruck;
+window.pcBuildTrucks=pcBuildTrucks; window.pcTrailerOptions=pcTrailerOptions;
+window.pcSetTruckType=pcSetTruckType; window.pcApplyGroupType=pcApplyGroupType;
+window.pcTrucksBody=pcTrucksBody; window.pcTypeSummary=pcTypeSummary; window.pcTypeSummaryAll=pcTypeSummaryAll;
+window.pcTruckAdd=pcTruckAdd; window.pcTruckType=pcTruckType;
+
+try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   1) HIGHLIGHT RULE — trucks that still need a trailer selected
+   Replaces the old inline #fdf0ef background (which washed out on hover
+   and turned the row text unreadable in dark mode) with a themed class.
+   =================================================================== */
+(function pcInjectTbdStyle(){
+  if(document.getElementById('pcTbdStyle')) return;
+  const st=document.createElement('style'); st.id='pcTbdStyle';
+  st.textContent = `
+    tr.trk-tbd td{ background:rgba(192,57,43,.10)!important; color:var(--text)!important; }
+    tr.trk-tbd:hover td{ background:rgba(192,57,43,.18)!important; }
+    tr.trk-tbd td *{ color:var(--text); }
+    tr.trk-tbd td .muted-sub{ color:var(--muted)!important; }
+    tr.trk-tbd td:first-child{ box-shadow:inset 3px 0 0 var(--red); }
+    body.dark tr.trk-tbd td{ background:rgba(229,96,79,.16)!important; }
+    body.dark tr.trk-tbd:hover td{ background:rgba(229,96,79,.24)!important; }
+    select.tbd-pick{ border-color:var(--red)!important; box-shadow:0 0 0 2px rgba(192,57,43,.12); }
+    .custom-type-wrap{ display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+  `;
+  document.head.appendChild(st);
+})();
+
+/* ===================================================================
+   2) CUSTOM / SPECIALIZED TRAILER TYPES
+   Any type a rep types in is remembered and offered to everyone else.
+   =================================================================== */
+const PC_CUSTOM_KEY='hht_customTrailers';
+function pcCustomTrailers(){
+  let saved=[]; try{ saved=JSON.parse(localStorage.getItem(PC_CUSTOM_KEY)||'[]')||[]; }catch(e){ saved=[]; }
+  const set=new Set(saved);
+  (DB.projects()||[]).forEach(p=>{
+    const sheets=(p.pkgSheets&&p.pkgSheets.length)?p.pkgSheets:[{trucks:p.trucks||[]}];
+    sheets.forEach(s=>(s.trucks||[]).forEach(t=>{ if(t.type && TRAILER_NAMES.indexOf(t.type)<0) set.add(t.type); }));
+  });
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+function pcRememberCustomTrailer(name){
+  name=(name||'').trim(); if(!name || TRAILER_NAMES.indexOf(name)>=0) return;
+  let saved=[]; try{ saved=JSON.parse(localStorage.getItem(PC_CUSTOM_KEY)||'[]')||[]; }catch(e){ saved=[]; }
+  if(saved.some(x=>x.toLowerCase()===name.toLowerCase())) return;
+  saved.push(name); try{ localStorage.setItem(PC_CUSTOM_KEY, JSON.stringify(saved)); }catch(e){}
+}
+function pcIsCustomType(t){ return !!t && TRAILER_NAMES.indexOf(t)<0; }
+
+/* Trailer dropdown: standard list + any custom types + a "type it in" option */
+function pcTrailerOptions(sel){
+  const customs=pcCustomTrailers();
+  let o=`<option value="" ${!sel?'selected':''}>— select trailer —</option>`;
+  o+=TRAILER_NAMES.map(n=>`<option ${sel===n?'selected':''}>${esc(n)}</option>`).join('');
+  if(customs.length){
+    o+=`<optgroup label="Specialized / Custom">`+customs.map(n=>`<option ${sel===n?'selected':''}>${esc(n)}</option>`).join('')+`</optgroup>`;
+  }
+  o+=`<option value="__custom">✎ Type a specialized trailer…</option>`;
+  return o;
+}
+function pcCustomDatalist(id){
+  const all=TRAILER_NAMES.concat(pcCustomTrailers());
+  return `<datalist id="${id}">${all.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
+}
+
+/* ---- inline manual entry: single truck ---- */
+function pcEditCustomTruckType(projId, truckId){
+  const sel=document.getElementById('tt-'+truckId); if(!sel) return;
+  const cell=sel.closest('td'); if(!cell) return;
+  const cur=(pcProject(projId)||{}).trucks ? ((pcProject(projId).trucks.find(t=>t.id===truckId)||{}).type||'') : '';
+  const dl='dl-'+truckId;
+  cell.innerHTML=`<div class="custom-type-wrap">
+      ${pcCustomDatalist(dl)}
+      <input id="ci-${truckId}" class="mini-input" list="${dl}" style="min-width:165px" placeholder="e.g. 9-Axle Perimeter" value="${esc(pcIsCustomType(cur)?cur:'')}"
+        onkeydown="if(event.key==='Enter')pcSaveCustomTruckType('${projId}','${truckId}');if(event.key==='Escape')route();">
+      <button class="rowbtn" style="background:#e3f6e9;color:var(--green)" onclick="pcSaveCustomTruckType('${projId}','${truckId}')">Save</button>
+      <button class="rowbtn" onclick="route()">Cancel</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:3px">Type any specialized trailer — it'll be saved for reuse.</div>`;
+  const inp=document.getElementById('ci-'+truckId); if(inp){ inp.focus(); inp.select(); }
+}
+function pcSaveCustomTruckType(projId, truckId){
+  const inp=document.getElementById('ci-'+truckId);
+  const v=inp?inp.value.trim():'';
+  if(!v){ toast('Type a trailer name, or hit Cancel'); return; }
+  pcRememberCustomTrailer(v);
+  pcSetTruckType(projId, truckId, v);
+}
+
+/* ---- inline manual entry: whole dimensional group ---- */
+function pcEditCustomGroupType(projId, type, ow, oh, uid){
+  const sel=document.getElementById('ty-'+uid); if(!sel) return;
+  const cell=sel.closest('td'); if(!cell) return;
+  const dl='dlg-'+uid;
+  cell.innerHTML=`<div class="custom-type-wrap">
+      ${pcCustomDatalist(dl)}
+      <input id="cg-${uid}" class="mini-input" list="${dl}" style="min-width:165px" placeholder="e.g. 13-Axle Schnabel"
+        onkeydown="if(event.key==='Enter')pcSaveCustomGroupType('${projId}','${jsq(type)}',${ow?1:0},${oh?1:0},'${uid}');if(event.key==='Escape')route();">
+      <button class="rowbtn" style="background:#e3f6e9;color:var(--green)" onclick="pcSaveCustomGroupType('${projId}','${jsq(type)}',${ow?1:0},${oh?1:0},'${uid}')">Apply to group</button>
+      <button class="rowbtn" onclick="route()">Cancel</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:3px">Applies to every truck sharing these dimensions.</div>`;
+  const inp=document.getElementById('cg-'+uid); if(inp) inp.focus();
+}
+function pcSaveCustomGroupType(projId, type, ow, oh, uid){
+  const inp=document.getElementById('cg-'+uid);
+  const v=inp?inp.value.trim():'';
+  if(!v){ toast('Type a trailer name, or hit Cancel'); return; }
+  pcRememberCustomTrailer(v);
+  pcApplyGroupType(projId, type, ow, oh, v);
+}
+
+/* ===================================================================
+   3) HANDLERS — route the "__custom" choice into manual entry
+   =================================================================== */
+function pcSetTruckType(id, truckId, value){
+  if(value==='__custom'){ pcEditCustomTruckType(id, truckId); return; }
+  const p=pcProject(id); if(!p) return;
+  const t=(p.trucks||[]).find(x=>x.id===truckId); if(!t) return;
+  t.type=value||''; t.needsType=!t.type;
+  if(t.type) pcRememberCustomTrailer(t.type);
+  pcRecalcTruck(t);
+  pcSaveProject(p); route();
+  toast(value?('Set to '+value):'Trailer type cleared');
+}
+function pcApplyGroupType(id, type, ow, oh, newType){
+  if(newType==='__custom'){ pcEditCustomGroupType(id, type, ow, oh, pcTruckGroupSan(type,!!ow,!!oh)); return; }
+  const p=pcProject(id); if(!p) return;
+  ow=!!ow; oh=!!oh;
+  if(!newType){ toast('Pick or type a trailer type first'); return; }
+  pcRememberCustomTrailer(newType);
+  let n=0;
+  (p.trucks||[]).forEach(t=>{
+    const fl=Array.isArray(t.flags)?t.flags:[];
+    const tow=fl.indexOf('Over-width')>=0, toh=fl.indexOf('Over-height')>=0;
+    if((t.type||'')===type && tow===ow && toh===oh){ t.type=newType; t.needsType=false; pcRecalcTruck(t); n++; }
+  });
+  pcSaveProject(p); route();
+  toast('Changed '+n+' truck'+(n===1?'':'s')+' to '+newType);
+}
+
+/* Custom types have no spec — still check width and tag them so the rep
+   can see at a glance that the trailer was entered by hand. */
+function pcRecalcTruck(t){
+  const spec=trailerSpec(t.type);
+  t.usedLen=(t.items||[]).reduce((s,p)=>s+(p.L||0),0);
+  t.weight =(t.items||[]).reduce((s,p)=>s+(p.weight||0),0);
+  t.maxW   =(t.items||[]).reduce((m,p)=>Math.max(m,p.W||0),0);
+  t.maxH   =(t.items||[]).reduce((m,p)=>Math.max(m,p.H||0),0);
+  t.flags=[];
+  if(!spec){
+    t.loadedH=t.maxH;
+    if(!t.type){
+      t.needsType=true; t.flags.push('Trailer TBD');
+      if((t.weight||0) > TRAILER_MAX_SINGLE) t.flags.push('Over max weight');
+      if((t.maxH||0)   > TRAILER_MAX_H)      t.flags.push('Over max height');
+      if((t.usedLen||0)> TRAILER_MAX_LEN)    t.flags.push('Over max length');
+    } else {
+      t.needsType=false; t.flags.push('Specialized');
+    }
+    if((t.maxW||0) > 102) t.flags.push('Over-width');
+    return t;
+  }
+  t.needsType=false;
+  t.loadedH=spec.deckH+t.maxH;
+  const n=(t.items||[]).length;
+  const cap = n>1 ? spec.multi : spec.single;
+  if(t.maxW  > spec.maxW) t.flags.push('Over-width');
+  if(t.maxH  > spec.maxH) t.flags.push('Over-height');
+  if(t.usedLen > spec.len) t.flags.push('Over-length');
+  if(t.weight > cap)      t.flags.push('Over-weight');
+  return t;
+}
+
+/* ===================================================================
+   4) TRUCK BREAKDOWN — themed highlight class + custom-entry wiring
+   =================================================================== */
+function pcFlagPill(f){
+  if(f==='Trailer TBD')  return `<span class="pill pending">${f}</span>`;
+  if(f==='Specialized')  return `<span class="pill type" title="Trailer typed in manually">✎ ${f}</span>`;
+  return `<span class="pill loss">${f}</span>`;
+}
+function pcTrucksBody(p){
+  if(p.awarded) return pcTrucksTrackBody(p);
+  const needCount=(p.trucks||[]).filter(t=>!t.type).length;
+  const banner = needCount ? `<div class="alert-box danger">
+      <h4>⚠️ Trailer Type Needed <span class="age-badge">${needCount}</span></h4>
+      <div class="a-sub">These pieces exceed every standard trailer's published limit (over ${TRAILER_MAX_SINGLE.toLocaleString()} lbs, over 11'6" tall, or over 60' long). Pick a trailer in the <strong>Type</strong> column below — or choose <strong>✎ Type a specialized trailer…</strong> to enter one by hand.</div>
+    </div>` : '';
+
+  const truckRows=(p.trucks||[]).map(t=>{
+    const spec=trailerSpec(t.type);
+    const custom=pcIsCustomType(t.type);
+    const manual=!!t.manual;
+    const n=(t.items||[]).length;
+    const cap = spec ? (n>1 ? spec.multi : spec.single) : null;
+    const flags=(t.flags&&t.flags.length)?`<div style="margin-top:3px">${t.flags.map(pcFlagPill).join(' ')}</div>`:'';
+    const typeCell = `<select id="tt-${t.id}" class="mini-input ${!t.type?'tbd-pick':''}" style="min-width:180px" onchange="pcSetTruckType('${p.id}','${t.id}',this.value)">${pcTrailerOptions(t.type)}</select>${manual?' <span class="pill vol">manual</span>':''}${flags}`;
+    const pkgs = (manual && !n) ? '\u2014' : n;
+    const lenU = spec ? `${inchesToFtIn(t.usedLen)} <span class="muted-sub" style="font-size:11px">/ ${inchesToFtIn(spec.len)}</span>` : inchesToFtIn(t.usedLen||0);
+    const mw = inchesToFtIn(t.maxW||0);
+    const mh = spec ? `${inchesToFtIn(t.maxH)} <span class="muted-sub" style="font-size:11px">(load ${inchesToFtIn(t.loadedH)})</span>` : inchesToFtIn(t.maxH||0);
+    const over = cap && (t.weight||0)>cap;
+    const wt = `<span style="${over?'color:var(--red);font-weight:700':''}">${Math.round(t.weight||0).toLocaleString()} lbs</span>${cap?`<div class="muted-sub" style="font-size:11px">cap ${cap.toLocaleString()} (${n>1?'multi':'single'})</div>`:(custom?`<div class="muted-sub" style="font-size:11px">specialized — no preset cap</div>`:'')}`;
+    return `<tr class="${!t.type?'trk-tbd':''}">
+      <td><strong>${t.id}</strong></td>
+      <td>${typeCell}</td>
+      <td>${pkgs}</td>
+      <td>${lenU}</td>
+      <td>${mw}</td>
+      <td>${mh}</td>
+      <td>${wt}</td>
+      <td><div style="display:flex;align-items:center;gap:4px">
+        <span class="muted-sub">$</span>
+        <input type="number" min="0" step="0.01" class="mini-num" style="width:96px" value="${t.rate!==''&&t.rate!=null?t.rate:''}" placeholder="0.00" onchange="pcSetTruckRate('${p.id}','${t.id}',this.value)">
+        <button class="rowbtn" title="Copy this rate to all ${esc(t.type||'same-type')} trucks" onclick="pcCopyRateToType('${p.id}','${t.id}')">\u2398 type</button>
+      </div></td>
+      <td>${manual?`<button class="rowbtn del" title="Remove manual truck" onclick="pcTruckDel('${p.id}','${t.id}')">\u2715</button>`:''}</td>
+    </tr>`;
+  }).join('');
+
+  const typeSum=pcTypeSummary(p).map(s=>{
+    const uniform = s.rates.size===1 ? [...s.rates][0] : '';
+    const uid=pcTruckGroupSan(s.type,s.ow,s.oh);
+    const flagPills=(s.ow?'<span class="pill loss" style="margin-left:4px">Over-width</span>':'')+(s.oh?'<span class="pill loss" style="margin-left:4px">Over-height</span>':'');
+    const label = s.type
+      ? `<span class="pill type">${esc(s.type)}</span>${pcIsCustomType(s.type)?' <span class="pill vol" title="Entered manually">✎</span>':''}`
+      : `<span class="pill pending">Trailer TBD</span>`;
+    return `<tr class="${!s.type?'trk-tbd':''}">
+      <td>${label}${flagPills}</td>
+      <td>${s.qty}</td>
+      <td>${inchesToFtIn(s.len)}</td>
+      <td>${inchesToFtIn(s.maxW)}</td>
+      <td>${inchesToFtIn(s.maxH)} <span class="muted-sub" style="font-size:11px">(load ${inchesToFtIn(s.loadedH)})</span></td>
+      <td><div style="display:flex;gap:5px;align-items:center">
+        <select class="mini-input ${!s.type?'tbd-pick':''}" id="ty-${uid}" style="min-width:175px" onchange="if(this.value==='__custom')pcEditCustomGroupType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0},'${uid}')">${pcTrailerOptions(s.type)}</select>
+        <button class="rowbtn" style="background:#eef2f8;color:var(--accent2)" title="Apply this trailer type to all ${s.qty} truck(s) in this group" onclick="pcApplyGroupType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0},document.getElementById('ty-${uid}').value)">Change all ${s.qty}</button>
+      </div></td>
+      <td>${s.amount?pcMoney(s.amount):'\u2014'}</td>
+      <td><div class="copy-rate-wrap"><span class="muted-sub">$</span>
+        <input type="number" min="0" step="0.01" class="mini-num" id="${uid}" value="${uniform!==''?uniform:''}" placeholder="rate / truck">
+        <button class="rowbtn" onclick="pcApplyGroupRate('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">Apply to all ${s.qty}</button>
+        <button class="rowbtn" style="background:#e3f6e9;color:var(--green)" title="Price one truck, then apply to all ${s.qty}" onclick="openGetPriceTruckType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">💲 Pricing Tool</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    ${banner}
+    <div class="card-sub">Trucks are built from the trailer restriction table — height sets the deck, length and axle count set the trailer, and weight is checked against the <strong>single-piece</strong> limit for solo loads and the <strong>multiple-piece</strong> limit once a second piece is added. Anything past every standard trailer is left blank and highlighted below. Need something the list doesn't cover? Choose <strong>✎ Type a specialized trailer…</strong> and enter it yourself — it's saved for reuse.</div>
+    <div class="table-wrap"><table style="min-width:1040px">
+      <thead><tr><th>Truck</th><th style="width:200px">Type</th><th>Pkgs</th><th>Length Used</th><th>Max W</th><th>Max H</th><th>Weight</th><th style="width:230px">Rate / Truck</th><th></th></tr></thead>
+      <tbody>${truckRows||'<tr><td colspan="9" class="empty">No trucks.</td></tr>'}</tbody>
+    </table></div>
+    <div style="text-align:right;margin-top:10px;font-weight:700;color:var(--ink)">Truck Subtotal (this page): ${pcMoney(pcTruckSubtotalPage(p))}</div>
+    <div style="margin-top:16px"><h3 style="font-size:14px;color:var(--ink);margin-bottom:8px">Truck Type Summary &amp; Quick Pricing</h3>
+      <div class="card-sub" style="margin:0 0 8px">Each row groups trucks with the same trailer type and over-dimension profile. Use <strong>Change all</strong> to switch that entire group — every truck sharing those dimensions updates together.</div>
+      <div class="table-wrap"><table style="min-width:920px">
+        <thead><tr><th>Type</th><th># Trucks</th><th>Total Length</th><th>Max W</th><th>Max H</th><th style="width:300px">Change Trailer Type</th><th>Amount</th><th>Copy Rate to Group</th></tr></thead>
+        <tbody>${typeSum||'<tr><td colspan="8" class="empty">\u2014</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+}
+
+/* Live-tracking rows: let the type be edited (incl. custom) once awarded */
+function pcTruckType(id,truckId,value){ pcSetTruckType(id,truckId,value); }
+
+/* expose */
+window.pcTrailerOptions=pcTrailerOptions; window.pcCustomTrailers=pcCustomTrailers;
+window.pcRememberCustomTrailer=pcRememberCustomTrailer; window.pcIsCustomType=pcIsCustomType;
+window.pcEditCustomTruckType=pcEditCustomTruckType; window.pcSaveCustomTruckType=pcSaveCustomTruckType;
+window.pcEditCustomGroupType=pcEditCustomGroupType; window.pcSaveCustomGroupType=pcSaveCustomGroupType;
+window.pcSetTruckType=pcSetTruckType; window.pcApplyGroupType=pcApplyGroupType;
+window.pcRecalcTruck=pcRecalcTruck; window.pcTrucksBody=pcTrucksBody; window.pcTruckType=pcTruckType;
+window.pcFlagPill=pcFlagPill;
+
+try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
 </script>
 
 </body>
