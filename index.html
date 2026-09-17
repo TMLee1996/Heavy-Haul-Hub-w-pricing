@@ -11024,6 +11024,1067 @@ window.pcFlagPill=pcFlagPill;
 
 try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
 </script>
+<script>
+/* ===================================================================
+   DUPLICATE CONTROL — NSE PROSPECTING / PROSPECT FUNNEL
+   -------------------------------------------------------------------
+   1) UPLOAD RULE: an incoming opportunity whose CUSTOMER NAME already
+      exists in the funnel is flagged as a duplicate and is NOT added.
+      Applies to: JSON import (Import Center), Funnel CSV import, and
+      Paste & Parse.
+   2) FIND DUPLICATES button: scans the funnel for records that share a
+      customer name, groups them, and lets the NSE choose which profile
+      to keep — with an optional merge of the losers' notes & details.
+   =================================================================== */
+
+/* ---------- name normalization ---------- */
+const DUP_SUFFIX_RE = /\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|holdings|group|intl|international|usa|us|lp|llp|plc|pllc)\b/g;
+let DUP_LOOSE = true;   /* ignore Inc / LLC / Corp etc. by default */
+
+function dupNorm(name, loose){
+  let s = (name==null?'':String(name)).toLowerCase();
+  s = s.replace(/&/g,' and ').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  if(loose===undefined) loose = DUP_LOOSE;
+  if(loose){ s = s.replace(DUP_SUFFIX_RE,' ').replace(/\s+/g,' ').trim(); }
+  return s;
+}
+function dupKey(name){ return dupNorm(name); }
+
+/* every customer name currently in the funnel */
+function dupExistingNameSet(){
+  const s=new Set(); (oppList()||[]).forEach(o=>{ const k=dupKey(o.company); if(k) s.add(k); }); return s;
+}
+function dupFindExisting(name){
+  const k=dupKey(name); if(!k) return null;
+  return (oppList()||[]).find(o=>dupKey(o.company)===k) || null;
+}
+
+/* ---------- completeness score (drives the suggested keeper) ---------- */
+function dupScore(o){
+  let s=0;
+  ['broker','office','industry','tier','likelihood','equipment','why','fact','presence','question','notes','classification']
+    .forEach(f=>{ if(o[f] && String(o[f]).trim()) s+=2; });
+  s += (o.notesLog||[]).length * 3;
+  if(o.intake){
+    s += 6;
+    if(o.intake.volumeQty) s+=3;
+    s += ((o.intake.modes||[]).length)*2;
+    s += ((o.intake.needs||[]).length)*2;
+    s += ((o.intake.steps||[]).length)*2;
+  }
+  if(o.brokerContacted) s+=2;
+  if(o.nseConversation) s+=3;
+  if(o.readyToQuote)    s+=4;
+  if(o.wonCustomer)     s+=8;
+  if(o.topOpp)          s+=5;
+  if(o.whale)           s+=5;
+  if(o.followUpDate)    s+=2;
+  return s;
+}
+
+/* ---------- merge losers into the keeper ---------- */
+function dupMergeInto(keeper, others){
+  const TXT=['broker','office','industry','tier','equipment','why','fact','presence','question','notes','classification','relationship','followUpDate'];
+  others.forEach(o=>{
+    TXT.forEach(f=>{ if((!keeper[f] || !String(keeper[f]).trim()) && o[f]) keeper[f]=o[f]; });
+    if((parseFloat(o.likelihood)||0) > (parseFloat(keeper.likelihood)||0)) keeper.likelihood=o.likelihood;
+    ['brokerContacted','nseConversation','readyToQuote','wonCustomer','topOpp','whale'].forEach(f=>{ if(o[f]) keeper[f]=true; });
+    /* notes */
+    keeper.notesLog = keeper.notesLog || [];
+    const seen=new Set(keeper.notesLog.map(n=>(n.ts||'')+'|'+(n.text||'')));
+    (o.notesLog||[]).forEach(n=>{ const k=(n.ts||'')+'|'+(n.text||''); if(!seen.has(k)){ keeper.notesLog.push(n); seen.add(k); } });
+    keeper.notesLog.sort((a,b)=>String(a.ts||'').localeCompare(String(b.ts||'')));
+    /* qualifying intake */
+    if(o.intake){
+      if(!keeper.intake){ keeper.intake=JSON.parse(JSON.stringify(o.intake)); }
+      else{
+        const K=keeper.intake, I=o.intake;
+        if(!K.volume && I.volume) K.volume=I.volume;
+        if((parseFloat(I.volumeQty)||0) > (parseFloat(K.volumeQty)||0)) K.volumeQty=I.volumeQty;
+        K.modes=[...new Set((K.modes||[]).concat(I.modes||[]))];
+        K.needs=[...new Set((K.needs||[]).concat(I.needs||[]))];
+        const stepSeen=new Set((K.steps||[]).map(s=>(s.text||'').toLowerCase()));
+        K.steps=(K.steps||[]);
+        (I.steps||[]).forEach(s=>{ const t=(s.text||'').toLowerCase(); if(t && !stepSeen.has(t)){ K.steps.push(s); stepSeen.add(t); } });
+      }
+    }
+  });
+  keeper.status = (typeof oppDeriveStatus==='function') ? oppDeriveStatus(keeper) : keeper.status;
+  return keeper;
+}
+
+/* ===================================================================
+   FIND DUPLICATES — scanner + chooser modal
+   =================================================================== */
+let DUP_GROUPS=null, DUP_MERGE=true;
+
+function dupScan(){
+  const byKey={};
+  (oppList()||[]).forEach(o=>{ const k=dupKey(o.company); if(!k) return; (byKey[k]=byKey[k]||[]).push(o); });
+  const groups=[];
+  Object.keys(byKey).forEach(k=>{
+    const arr=byKey[k];
+    if(arr.length<2) return;
+    const ranked=arr.slice().sort((a,b)=>dupScore(b)-dupScore(a));
+    groups.push({ key:k, label:ranked[0].company, items:ranked, keep:ranked[0].id });
+  });
+  groups.sort((a,b)=>b.items.length-a.items.length || a.label.localeCompare(b.label));
+  return groups;
+}
+
+function openDupFinder(){
+  DUP_GROUPS=dupScan();
+  renderDupFinder();
+  document.getElementById('modalBg').classList.add('show');
+}
+function dupSetLoose(on){ DUP_LOOSE=!!on; DUP_GROUPS=dupScan(); renderDupFinder(); }
+function dupSetKeep(gi,id){ if(DUP_GROUPS && DUP_GROUPS[gi]) DUP_GROUPS[gi].keep=id; renderDupFinder(); }
+function dupSetMerge(on){ DUP_MERGE=!!on; renderDupFinder(); }
+
+function dupRecapLine(o){
+  const stage = (typeof oppStage==='function' && typeof FUNNEL_MAP!=='undefined') ? (FUNNEL_MAP[oppStage(o)]||{}).label : '';
+  const bits=[];
+  if(o.office) bits.push('🏢 '+esc(o.office));
+  if(o.broker) bits.push('🤝 '+esc(o.broker));
+  if(o.industry) bits.push(esc(o.industry));
+  if(o.tier) bits.push(esc(o.tier));
+  if(o.likelihood) bits.push(esc(o.likelihood)+'/10');
+  if(stage) bits.push(esc(stage));
+  if((o.notesLog||[]).length) bits.push('📝 '+o.notesLog.length);
+  if(o.intake) bits.push('🧾 qualifying info');
+  if(o.topOpp) bits.push('⭐ Top');
+  if(o.whale) bits.push('🐋 Whale');
+  return bits.join(' · ');
+}
+
+function renderDupFinder(){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.add('wide'); modal.classList.add('xwide');
+  const groups=DUP_GROUPS||[];
+  const dupRecords=groups.reduce((s,g)=>s+g.items.length,0);
+  const willRemove=groups.reduce((s,g)=>s+(g.items.length-1),0);
+
+  const body = groups.length ? groups.map((g,gi)=>{
+    const rows=g.items.map((o,i)=>{
+      const keep=(g.keep===o.id);
+      const best=(i===0);
+      return `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid ${keep?'var(--green)':'var(--line)'};border-radius:9px;margin-bottom:7px;cursor:pointer;background:${keep?'rgba(27,135,63,.08)':'var(--card)'};text-transform:none;letter-spacing:0;font-weight:400">
+        <input type="radio" name="dupg${gi}" style="width:auto;margin-top:3px" ${keep?'checked':''} onchange="dupSetKeep(${gi},'${o.id}')">
+        <span style="flex:1">
+          <span style="font-weight:800;color:var(--ink)">${esc(o.company)}</span>
+          ${keep?'<span class="pill won" style="margin-left:6px">KEEP</span>':'<span class="pill loss" style="margin-left:6px">remove</span>'}
+          ${best?'<span class="pill type" style="margin-left:4px" title="Most complete record">✨ most complete</span>':''}
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">${dupRecapLine(o)||'<em>no details on this record</em>'}</div>
+        </span>
+        <button class="rowbtn" onclick="event.preventDefault();event.stopPropagation();closeModal();openOppDetail('${o.id}')" title="Open this record">👁️</button>
+      </label>`;
+    }).join('');
+    return `<div class="card" style="margin:0 0 12px;border-left:4px solid var(--amber)">
+      <div class="card-head" style="margin-bottom:8px">
+        <h3 style="font-size:15px">${esc(g.label)} <span style="color:var(--muted);font-weight:500;font-size:13px">· ${g.items.length} matching records</span></h3>
+        <button class="btn btn-primary" style="width:auto" onclick="dupResolveGroup(${gi})">✓ Keep selected · remove ${g.items.length-1}</button>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('') : `<div class="card"><div class="empty" style="padding:26px">✅ No duplicate customer names found in the funnel${DUP_LOOSE?' (Inc / LLC / Corp ignored)':''}.</div></div>`;
+
+  box.innerHTML=`<h3>🔎 Find Duplicates — Prospect Funnel</h3>
+    <div class="card-sub" style="margin-bottom:12px">Opportunities that share a <strong>customer name</strong> are grouped below. Pick the profile you want to <strong>keep</strong> in each group — the others are removed. Nothing changes until you resolve a group.</div>
+    <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-weight:700;margin:0;cursor:pointer"><input type="checkbox" style="width:auto" ${DUP_LOOSE?'checked':''} onchange="dupSetLoose(this.checked)"> Ignore Inc / LLC / Corp when matching</label>
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-weight:700;margin:0;cursor:pointer"><input type="checkbox" style="width:auto" ${DUP_MERGE?'checked':''} onchange="dupSetMerge(this.checked)"> Merge notes &amp; details into the kept profile</label>
+      <div style="flex:1"></div>
+      <span style="font-size:12px;color:var(--muted)">${groups.length} group(s) · ${dupRecords} records · ${willRemove} would be removed</span>
+    </div>
+    ${body}
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>
+      ${groups.length?`<button class="btn btn-primary" style="width:auto" onclick="dupResolveAll()">✓ Resolve All (${willRemove} removed)</button>`:''}
+    </div>`;
+}
+
+function dupResolveGroup(gi){
+  const g=(DUP_GROUPS||[])[gi]; if(!g) return;
+  const keeperId=g.keep;
+  const arr=oppList();
+  const keeper=arr.find(x=>x.id===keeperId);
+  if(!keeper){ toast('Could not find the record to keep'); return; }
+  const losers=g.items.filter(o=>o.id!==keeperId).map(o=>arr.find(x=>x.id===o.id)).filter(Boolean);
+  if(DUP_MERGE) dupMergeInto(keeper, losers);
+  const kill=new Set(losers.map(o=>o.id));
+  oppSave(arr.filter(o=>!kill.has(o.id)));
+  DUP_GROUPS=dupScan(); renderDupFinder(); route();
+  toast('Kept "'+keeper.company+'" · removed '+kill.size+' duplicate'+(kill.size===1?'':'s'));
+}
+
+function dupResolveAll(){
+  const groups=DUP_GROUPS||[]; if(!groups.length) return;
+  const total=groups.reduce((s,g)=>s+(g.items.length-1),0);
+  if(!confirm('Resolve all '+groups.length+' duplicate group(s)?\n\nThis keeps the selected profile in each group and removes '+total+' record(s).'+(DUP_MERGE?'\n\nNotes & details from the removed records will be merged into the ones you kept.':''))) return;
+  const arr=oppList(); const kill=new Set();
+  groups.forEach(g=>{
+    const keeper=arr.find(x=>x.id===g.keep); if(!keeper) return;
+    const losers=g.items.filter(o=>o.id!==g.keep).map(o=>arr.find(x=>x.id===o.id)).filter(Boolean);
+    if(DUP_MERGE) dupMergeInto(keeper, losers);
+    losers.forEach(o=>kill.add(o.id));
+  });
+  oppSave(arr.filter(o=>!kill.has(o.id)));
+  DUP_GROUPS=dupScan(); renderDupFinder(); route();
+  toast('Removed '+kill.size+' duplicate record'+(kill.size===1?'':'s'));
+}
+
+/* ===================================================================
+   UPLOAD RULE — block adds when the CUSTOMER NAME already exists
+   =================================================================== */
+
+/* ---- 1) JSON import staging (Import Center) ---- */
+if(typeof window.mergeAuxIntoStaging==='function'){
+  const _mergeAux=window.mergeAuxIntoStaging;
+  window.mergeAuxIntoStaging=function(aux){
+    try{
+      if(aux && Array.isArray(aux.opps) && aux.opps.length){
+        IMPORT_PREVIEW.oppDupes = IMPORT_PREVIEW.oppDupes || [];
+        const existing=dupExistingNameSet();
+        const staged=new Set(Object.values((IMPORT_PREVIEW.aux&&IMPORT_PREVIEW.aux.opps)||{}).map(o=>dupKey(o.company)));
+        const keep=[];
+        aux.opps.forEach(o=>{
+          const k=dupKey(o && o.company);
+          if(!k){ keep.push(o); return; }
+          if(existing.has(k) || staged.has(k)){
+            IMPORT_PREVIEW.oppDupes.push({ incoming:o, existing:dupFindExisting(o.company), reason: existing.has(k)?'already in funnel':'duplicate inside this upload' });
+          } else { staged.add(k); keep.push(o); }
+        });
+        aux = Object.assign({}, aux, {opps:keep});
+      }
+    }catch(e){ console.error(e); }
+    return _mergeAux(aux);
+  };
+}
+
+/* ---- 2) Final guard before the DB write ---- */
+if(typeof window.applyAuxToDB==='function'){
+  const _applyAux=window.applyAuxToDB;
+  window.applyAuxToDB=function(){
+    try{
+      const A=IMPORT_PREVIEW && IMPORT_PREVIEW.aux;
+      if(A && A.opps){
+        const existing=dupExistingNameSet();
+        Object.keys(A.opps).forEach(id=>{
+          const o=A.opps[id];
+          if(o && dupKey(o.company) && existing.has(dupKey(o.company)) && !oppList().some(x=>x.id===id)){
+            delete A.opps[id];
+          }
+        });
+      }
+    }catch(e){ console.error(e); }
+    return _applyAux();
+  };
+}
+
+/* ---- 3) Show the blocked duplicates in the Import Review modal ---- */
+if(typeof window.showImportReview==='function'){
+  const _showReview=window.showImportReview;
+  window.showImportReview=function(){
+    _showReview();
+    try{
+      const dupes=(IMPORT_PREVIEW && IMPORT_PREVIEW.oppDupes)||[];
+      if(!dupes.length) return;
+      const box=document.getElementById('modalBox');
+      const actions=box.querySelector('.modal-actions'); if(!actions) return;
+      const rows=dupes.slice(0,200).map(d=>`<tr>
+          <td><strong>${esc(d.incoming.company||'(unnamed)')}</strong><div style="font-size:11px;color:var(--muted)">${esc(d.incoming.office||'')}${d.incoming.broker?(' · '+esc(d.incoming.broker)):''}</div></td>
+          <td>${d.existing?esc(d.existing.company):'—'}<div style="font-size:11px;color:var(--muted)">${d.existing?esc(d.existing.office||''):''}</div></td>
+          <td style="color:var(--amber);font-weight:700">${esc(d.reason)}</td>
+          <td style="color:var(--muted)">Not added</td>
+        </tr>`).join('');
+      actions.insertAdjacentHTML('beforebegin', `
+        <div class="card" style="border-left:4px solid var(--amber)">
+          <div class="card-head"><h3>🚫 Funnel Duplicates — Blocked by Customer Name (${dupes.length})</h3>
+            <button class="btn btn-ghost" style="width:auto" onclick="closeModal();openDupFinder()">🔎 Find Duplicates</button></div>
+          <div class="card-sub">These opportunities were <strong>not added</strong> because an opportunity with the same customer name already exists in the funnel (or appeared twice in this upload). Everything else imports normally.</div>
+          <div class="table-wrap"><table style="min-width:620px">
+            <thead><tr><th>Incoming</th><th>Already in Funnel</th><th>Reason</th><th>Action</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table></div>
+          ${dupes.length>200?`<div style="font-size:12px;color:var(--muted);margin-top:6px">…and ${dupes.length-200} more.</div>`:''}
+        </div>`);
+      /* add a duplicates KPI tile next to the others */
+      const grid=box.querySelector('.kpi-grid');
+      if(grid) grid.insertAdjacentHTML('beforeend', `<div class="kpi b-amber"><div class="bar"></div><div class="lbl">Funnel Duplicates Blocked</div><div class="val">${dupes.length}</div></div>`);
+    }catch(e){ console.error(e); }
+  };
+}
+
+/* ---- 4) Funnel CSV import: match on customer name only ---- */
+if(typeof window.fcsvKey==='function'){
+  window.fcsvKey=function(company /*, office */){ return dupKey(company); };
+}
+
+/* ---- 5) Paste & Parse: never add a name that already exists ---- */
+if(typeof window.commitOppParse==='function'){
+  const _commit=window.commitOppParse;
+  window.commitOppParse=function(){
+    try{
+      const existing=dupExistingNameSet(); const seen=new Set();
+      const blocked=[];
+      if(Array.isArray(OPP_PARSE)){
+        OPP_PARSE.forEach(r=>{
+          if(!r || !r._on) return;
+          const k=dupKey(r.company);
+          if(!k) return;
+          if(existing.has(k) || seen.has(k)){ r._on=false; blocked.push(r.company); }
+          else seen.add(k);
+        });
+      }
+      if(blocked.length){
+        alert('Skipped '+blocked.length+' duplicate customer name(s) — already in the funnel:\n\n• '+blocked.slice(0,15).join('\n• ')+(blocked.length>15?('\n…and '+(blocked.length-15)+' more'):''));
+      }
+      if(Array.isArray(OPP_PARSE) && !OPP_PARSE.some(r=>r._on && (r.company||'').trim())){
+        toast('Every parsed company is already in the funnel'); return;
+      }
+    }catch(e){ console.error(e); }
+    return _commit();
+  };
+}
+
+/* ---- 6) Manual Add Opportunity: warn on a duplicate name ---- */
+if(typeof window.saveOppForm==='function'){
+  const _saveOpp=window.saveOppForm;
+  window.saveOppForm=function(){
+    try{
+      const nameEl=document.getElementById('of_company');
+      const name=nameEl?nameEl.value.trim():'';
+      if(name && !OPP_EDIT){
+        const hit=dupFindExisting(name);
+        if(hit && !confirm('“'+hit.company+'” is already in the funnel'+(hit.office?(' ('+hit.office+')'):'')+'.\n\nAdd this as a second record anyway?')) return;
+      }
+    }catch(e){ console.error(e); }
+    return _saveOpp();
+  };
+}
+
+/* ===================================================================
+   BUTTONS — Prospect Funnel action bar + Import Center card
+   =================================================================== */
+function dupCount(){ return dupScan().reduce((s,g)=>s+(g.items.length-1),0); }
+
+if(typeof window.pageFunnel==='function'){
+  const _pf=window.pageFunnel;
+  window.pageFunnel=function(){
+    let html=_pf();
+    try{
+      const n=dupCount();
+      const btn=`<button class="btn ${n?'btn-primary':'btn-ghost'}" style="width:auto${n?';background:var(--amber)':''}" onclick="openDupFinder()" title="Scan the funnel for duplicate customer names">🔎 Find Duplicates${n?` <span class="age-badge" style="background:rgba(0,0,0,.25)">${n}</span>`:''}</button>`;
+      const anchor='<button class="btn btn-ghost" style="width:auto" onclick="openOppParser()">';
+      const i=html.indexOf(anchor);
+      if(i>=0) html = html.slice(0,i) + btn + html.slice(i);
+      else html += `<div class="card" style="padding:14px 18px">${btn}</div>`;
+    }catch(e){ console.error(e); }
+    return html;
+  };
+}
+
+if(typeof window.pageImportCenter==='function'){
+  const _pic=window.pageImportCenter;
+  window.pageImportCenter=function(){
+    let html=_pic();
+    try{
+      const n=dupCount();
+      const card=`
+  <div class="card" style="border-left:4px solid var(--amber)">
+    <div class="card-head"><h3>🔎 Duplicate Control — Prospect Funnel</h3>${n?`<span class="age-badge warn">${n} duplicate record(s)</span>`:'<span class="tag">none found</span>'}</div>
+    <div class="card-sub">Uploads now match on <strong>Customer Name</strong> — if the name already exists in the funnel, the opportunity is flagged in the review screen and <strong>not added</strong>. Use <strong>Find Duplicates</strong> to clean up records that are already doubled up and choose which profile to keep.</div>
+    <button class="btn btn-primary" style="width:auto" onclick="openDupFinder()">🔎 Find Duplicates</button>
+  </div>`;
+      const anchor='<div class="card">';
+      const at=html.indexOf(anchor);
+      html = at>=0 ? (html.slice(0,at)+card+'\n  '+html.slice(at)) : (html+card);
+    }catch(e){ console.error(e); }
+    return html;
+  };
+}
+
+/* expose for inline handlers */
+window.dupNorm=dupNorm; window.dupKey=dupKey; window.dupScan=dupScan; window.dupScore=dupScore;
+window.dupExistingNameSet=dupExistingNameSet; window.dupFindExisting=dupFindExisting; window.dupMergeInto=dupMergeInto;
+window.openDupFinder=openDupFinder; window.renderDupFinder=renderDupFinder;
+window.dupSetLoose=dupSetLoose; window.dupSetKeep=dupSetKeep; window.dupSetMerge=dupSetMerge;
+window.dupResolveGroup=dupResolveGroup; window.dupResolveAll=dupResolveAll; window.dupCount=dupCount;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   PART 1 — REP PROSPECTING  ==  PROSPECT FUNNEL (rep-owned)
+   -------------------------------------------------------------------
+   The AR Tools "Rep Prospecting" page now runs the exact same funnel
+   engine as the NSE Prospect Funnel — board + stages, Whale tier,
+   qualifying / needs-assessment intake, notes, follow-up reminders,
+   Top 5, Paste & Parse, duplicate control and the Office Summary
+   Report — scoped to the rep who owns each opportunity.
+   =================================================================== */
+
+let FUNNEL_SCOPE = 'nse';      /* 'nse' = office funnel | 'rep' = rep funnel */
+let RPF_REP      = 'all';      /* rep filter while in rep scope */
+
+function repScope(){ return FUNNEL_SCOPE==='rep'; }
+function repLocked(){ return (typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep' && ACTIVE_REP && ACTIVE_REP!=='all'); }
+function rpfActiveRep(){ return repLocked() ? ACTIVE_REP : RPF_REP; }
+
+/* ---------- one-time migration: old rep prospects -> funnel opps ---------- */
+const RPF_MIGRATED='hht_repfunnel_migrated';
+function rpfProgressToFlags(prog){
+  const p=(prog||'').toLowerCase();
+  const f={brokerContacted:false,nseConversation:false,readyToQuote:false,wonCustomer:false};
+  if(p.indexOf('turning')>=0){ f.brokerContacted=f.nseConversation=f.readyToQuote=true; f.wonCustomer=true; }
+  else if(p.indexOf('quoting')>=0 || p.indexOf('negotiat')>=0){ f.brokerContacted=f.nseConversation=true; f.readyToQuote=true; }
+  else if(p.indexOf('needs')>=0){ f.brokerContacted=f.nseConversation=true; }
+  else if(p.indexOf('qualif')>=0 || p.indexOf('call')>=0){ f.brokerContacted=true; }
+  return f;
+}
+(function rpfMigrate(){
+  try{
+    if(localStorage.getItem(RPF_MIGRATED)==='1') return;
+    const store=(typeof DB.repprospects==='function')?(DB.repprospects()||{}):{};
+    const arr=oppList(); let n=0;
+    const seen=new Set(arr.map(o=>dupKey(o.company)+'|'+(o.rep||'')));
+    Object.keys(store).forEach(repU=>{
+      (store[repU]||[]).forEach(p=>{
+        const company=(p.customer||'').trim(); if(!company) return;
+        const k=dupKey(company)+'|'+repU; if(seen.has(k)) return; seen.add(k);
+        const f=rpfProgressToFlags(p.progress);
+        const rec={
+          id:'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,7)+n,
+          rep:repU, ownerType:'rep',
+          office:p.office||'', broker:p.broker||'', company:company,
+          industry:'', tier:'Tier 3 - Medium', likelihood:'',
+          equipment:p.service||'', why:'', fact:'', presence:'', question:'', notes:'',
+          relationship:'Prospect', classification:'',
+          brokerContacted:f.brokerContacted, nseConversation:f.nseConversation,
+          readyToQuote:f.readyToQuote, wonCustomer:f.wonCustomer,
+          topOpp:!!p.fav, whale:false,
+          notesLog:(p.notes||[]).map(x=>({ts:x.ts,text:x.text})),
+          legacyProgress:p.progress||''
+        };
+        rec.status=(typeof oppDeriveStatus==='function')?oppDeriveStatus(rec):'1 - No Communication';
+        if(p.volume||p.frequency){
+          rec.intake={ volume:p.frequency||'', volumeQty:(p.volume==null?'':String(p.volume)),
+            modes:[], needs:[], steps:[], savedAt:new Date().toISOString() };
+        }
+        arr.push(rec); n++;
+      });
+    });
+    if(n) oppSave(arr);
+    localStorage.setItem(RPF_MIGRATED,'1');
+    if(n) setTimeout(()=>toast('Migrated '+n+' rep prospect(s) into the Rep Prospect Funnel'),600);
+  }catch(e){ console.error(e); }
+})();
+
+/* ---------- scope filter: rep funnel vs NSE/office funnel ---------- */
+(function rpfWrapFilter(){
+  const _base=window.oppFilteredNoStage;
+  if(typeof _base!=='function') return;
+  window.oppFilteredNoStage=function(){
+    let list=_base();
+    if(repScope()){
+      list=list.filter(o=>!!o.rep);                       /* only rep-owned opps */
+      const r=rpfActiveRep();
+      if(r && r!=='all') list=list.filter(o=>o.rep===r);
+    } else {
+      list=list.filter(o=>!o.rep);                        /* office/NSE funnel */
+    }
+    return list;
+  };
+  if(typeof oppFilteredNoStage!=='undefined'){ try{ oppFilteredNoStage=window.oppFilteredNoStage; }catch(e){} }
+})();
+
+/* ---------- Top 5 panel + suggest, scoped ---------- */
+(function rpfWrapTop(){
+  const _ftp=window.funnelTopPanel, _sug=window.oppSuggestTop5;
+  if(typeof _ftp==='function'){
+    window.funnelTopPanel=function(){
+      if(!repScope()) return _ftp();
+      const r=rpfActiveRep();
+      const tops=oppList().filter(o=>o.topOpp && o.rep && (r==='all'||o.rep===r))
+        .sort((a,b)=>(typeof oppScore==='function'?oppScore(b)-oppScore(a):0)).slice(0,5);
+      const cards = tops.length ? tops.map(o=>{
+        const f=FUNNEL_MAP[oppStage(o)]; const vt=o.intake?oppVolumeText(o.intake):'';
+        return `<div class="card" style="margin:0;min-width:210px;flex:1;cursor:pointer;border-left:4px solid ${f.color}" onclick="openOppDetail('${o.id}')">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">
+            <strong style="font-size:13px;line-height:1.25">${esc(o.company)}</strong>
+            <button class="rowbtn" style="background:none;padding:0;font-size:16px;color:var(--accent)" onclick="event.stopPropagation();oppToggleTop('${o.id}')" title="Remove from Top Opps">★</button></div>
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">👤 ${esc(repName(o.rep))}${o.office?(' · '+esc(o.office)):''}</div>
+          <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+            <span class="pill" style="background:${f.color};color:#fff">${f.label}</span>
+            <span style="font-weight:800;color:var(--accent)">${esc(o.likelihood||'—')}/10</span></div>
+          ${vt?`<div style="font-size:11px;color:var(--muted);margin-top:5px">📦 ${esc(vt)}</div>`:''}
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">📝 ${(o.notesLog||[]).length} note(s)</div>
+        </div>`;
+      }).join('') : `<div class="empty" style="padding:18px;flex:1">No top prospects yet${r!=='all'?(' for '+esc(repName(r))):''}. Star up to 5, or click <strong>✨ Suggest Top 5</strong>.</div>`;
+      return `<div class="card">
+        <div class="card-head"><h3>⭐ Top 5 Rep Prospects <span style="color:var(--muted);font-weight:500;font-size:13px">(${tops.length}/5)</span></h3>
+          <button class="btn btn-ghost" style="width:auto" onclick="oppSuggestTop5()">✨ Suggest Top 5</button></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">${cards}</div></div>`;
+    };
+  }
+  if(typeof _sug==='function'){
+    window.oppSuggestTop5=function(){
+      if(!repScope()) return _sug();
+      const r=rpfActiveRep(); const arr=oppList();
+      const inScope=o=>o.rep && (r==='all'||o.rep===r);
+      const pool=arr.filter(o=>inScope(o) && oppStage(o)!=='customer' && !String(o.status||'').trim().startsWith('0'));
+      const top=pool.slice().sort((a,b)=>oppScore(b)-oppScore(a)).slice(0,5).map(o=>o.id);
+      arr.forEach(o=>{ if(inScope(o)) o.topOpp=false; });
+      arr.forEach(o=>{ if(top.indexOf(o.id)>=0) o.topOpp=true; });
+      oppSave(arr); route(); toast('✨ Suggested top 5 rep prospects');
+    };
+  }
+})();
+
+/* ---------- show the owning rep on cards / list / detail ---------- */
+(function rpfWrapCard(){
+  const _fc=window.funnelCard; if(typeof _fc!=='function') return;
+  window.funnelCard=function(o,f){
+    let h=_fc(o,f);
+    if(o.rep){
+      const anchor=`<div style="font-size:11px;color:var(--muted);margin-top:3px">`;
+      const i=h.indexOf(anchor);
+      if(i>=0) h=h.slice(0,i)+`<div style="font-size:11px;color:var(--accent2);font-weight:700;margin-top:3px">👤 ${esc(repName(o.rep))}</div>`+h.slice(i);
+    }
+    return h;
+  };
+})();
+(function rpfWrapExtras(){
+  const _ex=window.oppExtrasHTML; if(typeof _ex!=='function') return;
+  window.oppExtrasHTML=function(o){
+    const reps=DB.reps()||[];
+    const sel=`<select onchange="oppSetOwnerRep('${o.id}',this.value)" style="max-width:280px">
+        <option value="">— Office / NSE funnel (no rep) —</option>
+        ${reps.map(r=>`<option value="${r.u}" ${o.rep===r.u?'selected':''}>${esc(r.name)}${r.role==='ART'?' (ART)':''}</option>`).join('')}
+      </select>`;
+    const block=`<div class="dsec" style="margin-top:14px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2);font-weight:700;margin-bottom:6px">👤 Owner (Rep)${o.rep?` <span class="pill type">${esc(repName(o.rep))}</span>`:''}</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Assign a rep to move this opportunity onto the <strong>Rep Prospect Funnel</strong>. Leave it unassigned to keep it on the office / NSE funnel.</div>
+        ${sel}
+      </div>`;
+    return block+_ex(o);
+  };
+})();
+function oppSetOwnerRep(id, repU){
+  const arr=oppList(); const o=arr.find(x=>x.id===id); if(!o) return;
+  o.rep=repU||''; o.ownerType=repU?'rep':'office';
+  oppSave(arr); if(typeof OPP_DETAIL!=='undefined' && OPP_DETAIL===id) openOppDetail(id);
+  route(); toast(repU?('Assigned to '+repName(repU)):'Moved to the office / NSE funnel');
+}
+
+/* ---------- stamp new records with the current rep while in rep scope ---------- */
+function rpfStampNew(beforeIds){
+  if(!repScope()) return;
+  const r=rpfActiveRep(); if(!r || r==='all') return;
+  const arr=oppList(); let n=0;
+  arr.forEach(o=>{ if(!beforeIds.has(o.id) && !o.rep){ o.rep=r; o.ownerType='rep'; n++; } });
+  if(n) oppSave(arr);
+}
+(function rpfWrapCreators(){
+  const _save=window.saveOppForm, _parse=window.commitOppParse;
+  if(typeof _save==='function'){
+    window.saveOppForm=function(){ const before=new Set(oppList().map(o=>o.id)); const r=_save.apply(this,arguments); rpfStampNew(before); if(repScope()) route(); return r; };
+  }
+  if(typeof _parse==='function'){
+    window.commitOppParse=function(){ const before=new Set(oppList().map(o=>o.id)); const r=_parse.apply(this,arguments); rpfStampNew(before); if(repScope()) route(); return r; };
+  }
+})();
+
+/* ---------- rep selector bar ---------- */
+function rpfRepBar(){
+  const reps=DB.reps()||[];
+  const counts={}; oppList().forEach(o=>{ if(o.rep) counts[o.rep]=(counts[o.rep]||0)+1; });
+  const total=Object.values(counts).reduce((s,n)=>s+n,0);
+  if(repLocked()){
+    return `<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div class="tag" style="padding:9px 12px;font-size:14px">👤 ${esc(repName(ACTIVE_REP))}${isART(ACTIVE_REP)?' (ART)':''} <span style="color:var(--muted);font-weight:500">· your funnel · switch in top bar</span></div>
+      <div style="flex:1"></div><span style="font-size:12px;color:var(--muted)">${counts[ACTIVE_REP]||0} opportunit${(counts[ACTIVE_REP]||0)===1?'y':'ies'}</span>
+    </div>`;
+  }
+  const sel=`<select style="max-width:260px" onchange="RPF_REP=this.value;route()">
+      <option value="all" ${RPF_REP==='all'?'selected':''}>👥 All Reps (${total})</option>
+      ${reps.map(r=>`<option value="${r.u}" ${RPF_REP===r.u?'selected':''}>${esc(r.name)}${isART(r.u)?' (ART)':''} (${counts[r.u]||0})</option>`).join('')}
+    </select>`;
+  return `<div class="card" style="padding:14px 18px;display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap">
+    <div><label style="margin-bottom:6px">Viewing Rep</label>${sel}</div>
+    <div style="flex:1"></div>
+    ${RPF_REP!=='all'?`<span class="tag" style="margin-bottom:6px">Showing ${esc(repName(RPF_REP))} only</span>`:''}
+  </div>`;
+}
+
+/* ---------- the Rep Prospect Funnel page ---------- */
+function pageRepFunnel(){
+  const prev=FUNNEL_SCOPE; FUNNEL_SCOPE='rep';
+  let html='';
+  try{ html=window.pageFunnel(); } finally { FUNNEL_SCOPE=prev; }
+  html=html.replace('<div class="page-title">🧲 Prospect Funnel</div>','<div class="page-title">🧲 Rep Prospect Funnel</div>');
+  html=html.replace(/<div class="page-sub">[\s\S]*?<\/div>/,
+    '<div class="page-sub">Each rep\'s new-business funnel — the same engine as the NSE Prospect Funnel. Opportunities move Pre-Qualified → Qualifying → Qualified/Quoting → Customer, with the Whale tier, qualifying &amp; needs-assessment intake, notes, follow-up reminders, Top 5 and duplicate control. Assign an owner on any record to move it here.</div>');
+  /* drop the rep selector in just under the heading */
+  const bar=rpfRepBar();
+  const anchor='<div class="page-sub">';
+  const end=html.indexOf('</div>', html.indexOf(anchor));
+  if(end>=0) html=html.slice(0,end+6)+bar+html.slice(end+6);
+  else html=bar+html;
+  return html;
+}
+
+/* ---------- router + nav wiring ---------- */
+(function rpfWireRouter(){
+  const _route=window.route;
+  window.route=function(){
+    if(CURRENT_PAGE==='repprospects'){
+      if(typeof roleAllowsPage==='function' && !roleAllowsPage('repprospects')){ CURRENT_PAGE='home'; return _route(); }
+      const main=document.getElementById('main');
+      FUNNEL_SCOPE='rep';
+      try{ main.innerHTML=pageRepFunnel(); } finally { FUNNEL_SCOPE='nse'; }
+      return;
+    }
+    FUNNEL_SCOPE='nse';
+    return _route();
+  };
+  /* keep scope correct while the rep page is open (cards/modals re-render) */
+  const _go=window.go, _goNav=window.goNav;
+  window.go=function(p){ FUNNEL_SCOPE=(p==='repprospects')?'rep':'nse'; return _go(p); };
+  window.goNav=function(p,g){ FUNNEL_SCOPE=(p==='repprospects')?'rep':'nse'; return _goNav(p,g); };
+  try{
+    const ar=NAV_GROUPS.find(g=>g.id==='ar');
+    if(ar){ const it=ar.items.find(x=>x.id==='repprospects'); if(it) it.label='Rep Prospect Funnel'; }
+    if(typeof buildSidebar==='function') buildSidebar();
+  }catch(e){}
+})();
+
+/* modals fired from the rep page must keep rep scope while they re-render */
+(function rpfKeepScope(){
+  ['openOppDetail','openOppForm','openOppIntake','openOppParser','oppFunnelSummary','openDupFinder'].forEach(fn=>{
+    const _f=window[fn]; if(typeof _f!=='function') return;
+    window[fn]=function(){ const onRep=(CURRENT_PAGE==='repprospects'); const prev=FUNNEL_SCOPE;
+      if(onRep) FUNNEL_SCOPE='rep';
+      try{ return _f.apply(this,arguments); } finally { if(!onRep) FUNNEL_SCOPE=prev; }
+    };
+  });
+})();
+
+/* ===================================================================
+   PART 2 — OFFICE SUMMARY REPORT:  TOP 5 OPPORTUNITIES FILTER
+   -------------------------------------------------------------------
+   Adds a "Top 5" mode: show only the five strongest opportunities for
+   the selected office — or the top 5 *per office* when running All
+   Offices. Ranked by funnel progress, volume, likelihood, tier and
+   activity (starred opps always rank first).
+   =================================================================== */
+
+function osrRank(o){
+  let s=0;
+  if(o.topOpp) s+=100;                                   /* starred wins */
+  if(o.whale)  s+=15;
+  const stage={prequalified:1,qualifying:2,quoting:3,customer:4}[oppStage(o)]||0;
+  s += stage*8;
+  s += (parseFloat(o.likelihood)||0)*4;
+  const tier=oppTierNum(o.tier); if(tier>=1&&tier<=4) s += (5-tier)*3;
+  const vol=(typeof oppVolNum==='function')?oppVolNum(o):0;
+  if(vol>0) s += Math.min(Math.log10(vol+1)*6, 18);
+  s += Math.min((o.notesLog||[]).length*2, 10);
+  if(o.intake) s+=6;
+  if(o.readyToQuote) s+=6;
+  if(o.followUpDate) s+=2;
+  return s;
+}
+function osrTopN(list, n){
+  n=n||5;
+  const byOffice={};
+  list.forEach(o=>{ const k=o.office||'(No office)'; (byOffice[k]=byOffice[k]||[]).push(o); });
+  const out=[];
+  Object.keys(byOffice).forEach(k=>{
+    byOffice[k].sort((a,b)=>osrRank(b)-osrRank(a));
+    byOffice[k].slice(0,n).forEach(o=>out.push(o));
+  });
+  return out;
+}
+
+/* default + filter hook */
+(function osrWrapTop5(){
+  const _def=window.osrDefault;
+  if(typeof _def==='function'){ window.osrDefault=function(){ const c=_def(); c.top5=false; c.topN=5; return c; }; }
+  const _filt=window.osrFiltered;
+  if(typeof _filt==='function'){
+    window.osrFiltered=function(){
+      let list=_filt();
+      if(OSR && OSR.top5) list=osrTopN(list, OSR.topN||5);
+      return list;
+    };
+  }
+})();
+
+/* control chips in the report builder */
+(function osrWrapRender(){
+  const _render=window.renderOfficeSummary; if(typeof _render!=='function') return;
+  window.renderOfficeSummary=function(){
+    _render();
+    try{
+      if(!OSR) return;
+      const box=document.getElementById('modalBox');
+      const prev=box.querySelector('#osrPreview'); if(!prev) return;
+      const label=prev.previousElementSibling; /* "Live Preview —" line */
+      const n=OSR.topN||5;
+      const chip=(v,l)=>`<button class="chip ${((!OSR.top5&&v==='all')||(OSR.top5&&OSR.topN===v))?'active':''}" onclick="osrSetTop(${v==='all'?"'all'":v})">${l}</button>`;
+      const scope = (OSR.office==='all') ? 'per office' : 'for '+esc(OSR.office);
+      const html=`<div class="card" style="padding:12px 16px;margin-bottom:10px;border-left:4px solid var(--accent)">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent2);margin-bottom:6px">⭐ Top Opportunities Filter</div>
+            <div class="filterbar" style="margin:0">${chip('all','All opportunities')}${chip(3,'Top 3')}${chip(5,'Top 5')}${chip(10,'Top 10')}</div>
+          </div>
+          <div style="flex:1;min-width:200px;font-size:12px;color:var(--muted)">
+            ${OSR.top5?`Showing the strongest <strong>${n}</strong> opportunities ${scope}, ranked by funnel progress, volume, likelihood, tier and activity. ⭐ starred opps always rank first.`:'Turn on a Top filter to boil the report down to the strongest opportunities '+scope+'.'}
+          </div>
+        </div>
+      </div>`;
+      if(label && label.parentNode) label.insertAdjacentHTML('beforebegin', html);
+      else prev.insertAdjacentHTML('beforebegin', html);
+    }catch(e){ console.error(e); }
+  };
+})();
+function osrSetTop(v){
+  if(!OSR) return;
+  if(v==='all'){ OSR.top5=false; } else { OSR.top5=true; OSR.topN=parseInt(v)||5; }
+  renderOfficeSummary();
+}
+
+/* show the filter on the printed/copied report */
+(function osrWrapOutput(){
+  const _html=window.osrReportHTML, _text=window.osrReportText;
+  if(typeof _html==='function'){
+    window.osrReportHTML=function(list){
+      let h=_html(list);
+      if(OSR && OSR.top5){
+        const scope=(OSR.office==='all')?'per office':'for '+esc(OSR.office);
+        h=h.replace('Filters: <strong>', 'View: <strong>⭐ Top '+(OSR.topN||5)+' '+scope+'</strong> &nbsp;·&nbsp; Filters: <strong>');
+      }
+      return h;
+    };
+  }
+  if(typeof _text==='function'){
+    window.osrReportText=function(list){
+      let t=_text(list);
+      if(OSR && OSR.top5){
+        const scope=(OSR.office==='all')?'per office':'for '+OSR.office;
+        t=t.replace('='.repeat(52), 'VIEW: Top '+(OSR.topN||5)+' opportunities '+scope+'\n'+'='.repeat(52));
+      }
+      return t;
+    };
+  }
+})();
+
+/* a one-click "Top 5 for this office" button on the funnel action bar */
+(function osrTop5Shortcut(){
+  const _pf=window.pageFunnel; if(typeof _pf!=='function') return;
+  window.pageFunnel=function(){
+    let html=_pf();
+    try{
+      const btn=`<button class="btn btn-ghost" style="width:auto" onclick="osrOpenTop5()" title="Office Summary Report, filtered to the top 5 opportunities">⭐ Top 5 Report</button>`;
+      const anchor='<button class="btn btn-ghost" style="width:auto" onclick="oppFunnelSummary()">';
+      const i=html.indexOf(anchor);
+      if(i>=0) html=html.slice(0,i)+btn+html.slice(i);
+    }catch(e){ console.error(e); }
+    return html;
+  };
+})();
+function osrOpenTop5(){
+  OSR=osrDefault();
+  if(typeof OPP_OFF!=='undefined' && OPP_OFF!=='all') OSR.office=OPP_OFF;
+  OSR.top5=true; OSR.topN=5;
+  renderOfficeSummary();
+}
+
+/* expose */
+window.repScope=repScope; window.rpfActiveRep=rpfActiveRep; window.rpfRepBar=rpfRepBar;
+window.pageRepFunnel=pageRepFunnel; window.oppSetOwnerRep=oppSetOwnerRep;
+window.osrRank=osrRank; window.osrTopN=osrTopN; window.osrSetTop=osrSetTop; window.osrOpenTop5=osrOpenTop5;
+
+try{ if(typeof buildSidebar==='function') buildSidebar(); if(typeof route==='function') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   1) FIX — APPROVE IMPORT (JSON)
+   -------------------------------------------------------------------
+   The duplicate-control wrappers could leave the staged NSE Tools
+   payload in a state that threw mid-write, so nothing saved and the
+   modal just sat there. This is a clean, self-contained rewrite of
+   approveImport() with hard error handling, plus a defensive rebuild
+   of applyAuxToDB() that never throws on a missing/blank bucket.
+   =================================================================== */
+
+/* ---- safe staged-aux accessor ---- */
+function impAux(){
+  if(!IMPORT_PREVIEW) IMPORT_PREVIEW={};
+  const A = IMPORT_PREVIEW.aux = IMPORT_PREVIEW.aux || {};
+  ['nses','reps','prospects','repprospects','nsemeta','customers','projects','opps','oppOffices']
+    .forEach(k=>{ if(!A[k] || typeof A[k]!=='object') A[k]={}; });
+  return A;
+}
+
+/* ---- rebuilt, exception-proof NSE Tools writer ---- */
+window.applyAuxToDB = function(){
+  const A=impAux();
+  const t={nses:0,reps:0,prospects:0,repprospects:0,nsemeta:0,customers:0,projects:0,opps:0,oppOffices:0};
+
+  try{ /* NSE roster */
+    const nses=DB.nses()||[]; const byU={}; nses.forEach(n=>byU[n.u]=n);
+    Object.values(A.nses).forEach(inc=>{ if(!inc||!inc.u) return;
+      if(byU[inc.u]) Object.assign(byU[inc.u],inc); else { const nn=Object.assign({},inc); nses.push(nn); byU[nn.u]=nn; }
+      t.nses++; });
+    DB.saveNses(nses);
+  }catch(e){ console.error('aux/nses',e); }
+
+  try{ /* Reps — union offices + NSE claims */
+    const reps=DB.reps()||[]; const byU={}; reps.forEach(r=>byU[r.u]=r);
+    Object.values(A.reps).forEach(inc=>{ if(!inc||!inc.u) return;
+      const cur=byU[inc.u];
+      if(cur){
+        if(inc.name) cur.name=inc.name;
+        if(inc.role) cur.role=inc.role;
+        if(inc.mentorAR!==undefined) cur.mentorAR=inc.mentorAR;
+        if(Array.isArray(inc.offices)) cur.offices=Array.from(new Set([...(cur.offices||[]),...inc.offices]));
+        const claims=Array.isArray(inc.nses)?inc.nses:(inc.nse?[inc.nse]:null);
+        if(claims){ cur.nses=Array.from(new Set([...repNses(cur),...claims])); delete cur.nse; }
+      } else {
+        const nr=Object.assign({nses:[],offices:[]},inc);
+        if(!Array.isArray(nr.nses)) nr.nses=nr.nse?[nr.nse]:[]; delete nr.nse;
+        reps.push(nr); byU[nr.u]=nr;
+      }
+      t.reps++; });
+    DB.saveReps(reps);
+  }catch(e){ console.error('aux/reps',e); }
+
+  try{ /* NSE prospect pipelines */
+    const pr=DB.prospects()||{};
+    Object.keys(A.prospects).forEach(nseU=>{
+      pr[nseU]=Array.isArray(pr[nseU])?pr[nseU]:[];
+      const byId={}; pr[nseU].forEach(p=>{ if(p&&p.id) byId[p.id]=p; });
+      Object.values(A.prospects[nseU]||{}).forEach(inc=>{ if(!inc) return;
+        if(inc.id && byId[inc.id]) Object.assign(byId[inc.id],inc);
+        else { pr[nseU].push(inc); if(inc.id) byId[inc.id]=inc; }
+        t.prospects++; });
+    });
+    DB.saveProspects(pr);
+  }catch(e){ console.error('aux/prospects',e); }
+
+  try{ /* Rep prospect pipelines */
+    const rp=DB.repprospects()||{};
+    Object.keys(A.repprospects).forEach(repU=>{
+      rp[repU]=Array.isArray(rp[repU])?rp[repU]:[];
+      const byId={}; rp[repU].forEach(p=>{ if(p&&p.id) byId[p.id]=p; });
+      Object.values(A.repprospects[repU]||{}).forEach(inc=>{ if(!inc) return;
+        if(inc.id && byId[inc.id]) Object.assign(byId[inc.id],inc);
+        else { rp[repU].push(inc); if(inc.id) byId[inc.id]=inc; }
+        t.repprospects++; });
+    });
+    DB.saveRepProspects(rp);
+  }catch(e){ console.error('aux/repprospects',e); }
+
+  try{ /* NSE opportunity meta */
+    const meta=DB.nsemeta()||{};
+    Object.keys(A.nsemeta).forEach(nseU=>{
+      meta[nseU]=meta[nseU]||{};
+      Object.keys(A.nsemeta[nseU]||{}).forEach(cust=>{
+        meta[nseU][cust]=Object.assign({},meta[nseU][cust],A.nsemeta[nseU][cust]); t.nsemeta++; });
+    });
+    DB.saveNsemeta(meta);
+  }catch(e){ console.error('aux/nsemeta',e); }
+
+  try{ /* Customers */
+    const cust=DB.customers()||{};
+    Object.keys(A.customers).forEach(k=>{ cust[k]=Object.assign({},cust[k],A.customers[k]); t.customers++; });
+    DB.saveCustomers(cust);
+  }catch(e){ console.error('aux/customers',e); }
+
+  try{ /* Projects */
+    const projects=DB.projects()||[]; const byId={}; projects.forEach(x=>{ if(x&&x.id) byId[x.id]=x; });
+    Object.values(A.projects).forEach(inc=>{ if(!inc) return;
+      if(inc.id && byId[inc.id]) Object.assign(byId[inc.id],inc);
+      else { projects.push(inc); if(inc.id) byId[inc.id]=inc; }
+      t.projects++; });
+    DB.saveProjects(projects);
+  }catch(e){ console.error('aux/projects',e); }
+
+  try{ /* Prospect Funnel opportunities — blocked by customer name */
+    const opps=DB.opps()||[]; const byId={}; opps.forEach(x=>{ if(x&&x.id) byId[x.id]=x; });
+    const nameSet=(typeof dupExistingNameSet==='function')?dupExistingNameSet():new Set();
+    const keyOf=(typeof dupKey==='function')?dupKey:(s=>String(s||'').trim().toLowerCase());
+    Object.values(A.opps).forEach(inc=>{ if(!inc) return;
+      if(inc.id && byId[inc.id]){ Object.assign(byId[inc.id],inc); t.opps++; return; }
+      const k=keyOf(inc.company);
+      if(k && nameSet.has(k)) return;                       /* duplicate name → skip */
+      opps.push(inc); if(inc.id) byId[inc.id]=inc; if(k) nameSet.add(k); t.opps++; });
+    DB.saveOpps(opps);
+  }catch(e){ console.error('aux/opps',e); }
+
+  try{ /* Funnel offices */
+    const offSet=new Set(DB.oppOffices()||[]);
+    Object.keys(A.oppOffices).forEach(n=>{ if(n && !offSet.has(n)){ offSet.add(n); t.oppOffices++; } });
+    DB.saveOppOffices(Array.from(offSet));
+  }catch(e){ console.error('aux/oppOffices',e); }
+
+  return t;
+};
+
+/* ---- rebuilt Approve Import ---- */
+window.approveImport = function(){
+  try{
+    /* backup for Undo — never let a full localStorage kill the import */
+    try{ localStorage.setItem('hht_preImportBackup', JSON.stringify(snapshot())); }
+    catch(e){ console.warn('Backup skipped (storage full):', e); }
+
+    const P = IMPORT_PREVIEW || {};
+    const additions  = Array.isArray(P.additions)  ? P.additions  : [];
+    const updates    = Array.isArray(P.updates)    ? P.updates    : [];
+    const duplicates = Array.isArray(P.duplicates) ? P.duplicates : [];
+
+    const quotes=DB.quotes()||[]; const byId={}; quotes.forEach(q=>{ if(q&&q.id) byId[q.id]=q; });
+    let added=0, updated=0, skipped=0;
+
+    additions.forEach(a=>{ if(!a||!a.incoming) return;
+      quotes.push(a.incoming); byId[a.incoming.id]=a.incoming; added++; });
+
+    updates.forEach(u=>{ if(!u||!u.incoming) return;
+      const target = u.existing || byId[u.incoming.id];
+      if(target){ const {id, ...rest}=u.incoming; Object.assign(target,rest); updated++; }
+      else { quotes.push(u.incoming); byId[u.incoming.id]=u.incoming; added++; }
+    });
+
+    duplicates.forEach(d=>{ if(!d||!d.incoming) return;
+      if(d.action==='skip'){ skipped++; }
+      else if(d.action==='replace' && d.existing){ const {id, ...rest}=d.incoming; Object.assign(d.existing,rest); updated++; }
+      else { const q=Object.assign({}, d.incoming, {id:uid()}); quotes.push(q); byId[q.id]=q; added++; }
+    });
+
+    DB.saveQuotes(quotes);
+
+    let aux={}, auxSum=0;
+    try{ aux=applyAuxToDB()||{}; auxSum=Object.keys(aux).reduce((s,k)=>s+(Number(aux[k])||0),0); }
+    catch(e){ console.error('applyAuxToDB failed:',e); }
+
+    const blocked=(P.oppDupes||[]).length;
+
+    IMPORT_LAST={ when:new Date().toISOString(), files:(P.files||[]).slice(),
+      added, updated, skipped, blocked, aux, auxSum, errors:(P.errors||[]).slice() };
+    try{ localStorage.setItem('hht_lastImport', JSON.stringify(IMPORT_LAST)); }catch(e){}
+
+    IMPORT_PREVIEW={ additions:[], updates:[], duplicates:[], files:[], errors:[], oppDupes:[],
+      aux:{ nses:{}, reps:{}, prospects:{}, repprospects:{}, nsemeta:{}, customers:{}, projects:{}, opps:{}, oppOffices:{} } };
+
+    closeModal();
+    CURRENT_PAGE='importcenter';
+    if(typeof buildSidebar==='function') buildSidebar();
+    route(); window.scrollTo(0,0);
+
+    toast('Import complete — '+added+' added, '+updated+' updated, '+skipped+' skipped'
+      + (auxSum?(', '+auxSum+' NSE Tools updated'):'')
+      + (blocked?(', '+blocked+' duplicate name(s) blocked'):''));
+  }catch(err){
+    console.error('approveImport failed:',err);
+    alert('The import could not be completed.\n\n'+(err && err.message ? err.message : err)
+      + '\n\nNothing was lost — your existing data is untouched. Try re-selecting the file, or use Undo Last Import if needed.');
+  }
+};
+
+/* make sure the staging reset always includes the duplicate bucket */
+if(typeof window.stageImport==='function'){
+  const _stage=window.stageImport;
+  window.stageImport=function(files){
+    const r=_stage.apply(this,arguments);
+    try{ IMPORT_PREVIEW.oppDupes=IMPORT_PREVIEW.oppDupes||[]; impAux(); }catch(e){}
+    return r;
+  };
+}
+
+/* ===================================================================
+   2) REMOVE the two Import Center cards
+   -------------------------------------------------------------------
+   Strips "Duplicate Control — Prospect Funnel" and
+   "Prospect Funnel — CSV Import" out of the Import Center render.
+   The Find Duplicates button on the Prospect Funnel is untouched, and
+   the name-based upload blocking still runs behind the scenes.
+   =================================================================== */
+function impStripCard(html, needle){
+  const at=html.indexOf(needle); if(at<0) return html;
+  /* walk backwards to the opening <div class="card" ...> */
+  const start=html.lastIndexOf('<div class="card', at); if(start<0) return html;
+  /* walk forward counting div depth to find its matching close */
+  let i=start, depth=0;
+  const openRe=/<div\b/gi, closeRe=/<\/div>/gi;
+  let cursor=start, end=-1;
+  while(cursor<html.length){
+    openRe.lastIndex=cursor; closeRe.lastIndex=cursor;
+    const o=openRe.exec(html), c=closeRe.exec(html);
+    const oi=o?o.index:Infinity, ci=c?c.index:Infinity;
+    if(oi===Infinity && ci===Infinity) break;
+    if(oi<ci){ depth++; cursor=oi+4; }
+    else { depth--; cursor=ci+6; if(depth===0){ end=cursor; break; } }
+  }
+  if(end<0) return html;
+  return html.slice(0,start)+html.slice(end);
+}
+
+if(typeof window.pageImportCenter==='function'){
+  const _pic=window.pageImportCenter;
+  window.pageImportCenter=function(){
+    let html=_pic();
+    try{
+      html=impStripCard(html,'Duplicate Control');
+      html=impStripCard(html,'Prospect Funnel — CSV Import');
+      html=impStripCard(html,'Prospect Funnel \u2014 CSV Import');
+    }catch(e){ console.error(e); }
+    return html;
+  };
+}
+
+/* ===================================================================
+   3) ARs (reps) get the Import Center
+   -------------------------------------------------------------------
+   Reps working under their own profile now see Extra → Import Center
+   (Manage Reps stays manager/NSE-only).
+   =================================================================== */
+try{ if(typeof REP_PAGES!=='undefined' && REP_PAGES.indexOf('importcenter')<0) REP_PAGES.push('importcenter'); }catch(e){}
+
+window.roleAllowsGroup=function(gid){
+  if(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep'){
+    return gid==='home' || gid==='ar' || gid==='extra';
+  }
+  return true;
+};
+
+/* sidebar now filters GROUPS *and* ITEMS, so a rep sees Import Center
+   inside Extra without Manage Reps showing up */
+window.buildSidebar=function(){
+  if(!NAV_INIT){ navOpenForPage(CURRENT_PAGE); if(!Object.keys(NAV_OPEN).length) NAV_OPEN.home=true; NAV_INIT=true; }
+  let h='';
+  NAV_GROUPS.filter(g=>roleAllowsGroup(g.id)).forEach(g=>{
+    const items=g.items.filter(it=>roleAllowsPage(it.id));
+    if(!items.length) return;
+    const open=!!NAV_OPEN[g.id];
+    const hasActive=items.some(it=>it.id===CURRENT_PAGE);
+    h+=`<div class="nav-group ${open?'':'closed'}">`;
+    h+=`<button class="nav-group-head ${hasActive?'has-active':''}" onclick="navToggle('${g.id}')"><span class="ic">${g.icon}</span><span class="lbl">${g.label}</span><span class="nav-chev">▾</span></button>`;
+    h+=`<div class="nav-group-body">`;
+    items.forEach(it=>{ h+=navBtn(it.id,it.ic,it.label,g.id); });
+    h+=`</div></div>`;
+  });
+  const sb=document.getElementById('sidebar'); if(sb) sb.innerHTML=h;
+};
+
+/* expose */
+window.impAux=impAux; window.impStripCard=impStripCard;
+
+try{ if(typeof buildSidebar==='function') buildSidebar(); if(typeof route==='function') route(); }catch(e){}
+</script>
 
 </body>
 </html>
