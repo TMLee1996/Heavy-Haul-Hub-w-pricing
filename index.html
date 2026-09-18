@@ -13017,6 +13017,290 @@ window.pxRepOfficesFor=pxRepOfficesFor; window.pxScopedRep=pxScopedRep;
 
 try{ if(typeof route==='function') route(); }catch(e){}
 </script>
+<script>
+/* ===================================================================
+   0) DIMENSION ENTRY HELPERS
+   Accepts 48, 48", 4'6", 4' 6, 4.5ft — anything the reps actually type.
+   =================================================================== */
+function mtdParseLen(v){
+  if(v==null) return 0;
+  let s=String(v).trim().toLowerCase(); if(!s) return 0;
+  s=s.replace(/[\u2032\u00b4`]/g,"'").replace(/[\u2033\u201d]/g,'"');
+  let m;
+  /* 4'6"  |  4' 6  |  4'6 */
+  if((m=s.match(/^(\d+(?:\.\d+)?)\s*'\s*(\d+(?:\.\d+)?)\s*"?$/))) return parseFloat(m[1])*12+parseFloat(m[2]);
+  /* 4'  |  4 ft  |  4 feet */
+  if((m=s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)$/))) return parseFloat(m[1])*12;
+  /* 48"  |  48 in  |  48 inch */
+  if((m=s.match(/^(\d+(?:\.\d+)?)\s*(?:"|in|inch|inches)$/))) return parseFloat(m[1]);
+  /* plain number -> inches */
+  if((m=s.match(/^(\d+(?:\.\d+)?)$/))) return parseFloat(m[1]);
+  const n=parseFloat(s.replace(/[^0-9.]/g,'')); return isNaN(n)?0:n;
+}
+function mtdParseWt(v){
+  if(v==null) return 0;
+  const n=parseFloat(String(v).replace(/[^0-9.]/g,'')); return isNaN(n)?0:n;
+}
+function mtdFt(inches){
+  try{ return (typeof inchesToFtIn==='function') ? (inchesToFtIn(inches)||'—') : (Math.round(inches||0)+'"'); }
+  catch(e){ return Math.round(inches||0)+'"'; }
+}
+function mtdTruck(projId, truckId){
+  const p=pcProject(projId); if(!p) return null;
+  return (p.trucks||[]).find(t=>t.id===truckId) || null;
+}
+
+/* ===================================================================
+   1) PRODUCT DIMENSIONS MODAL — per truck
+   =================================================================== */
+let MTD = null;   /* { projId, truckId, rows:[{desc,qty,L,W,H,weight}] } */
+
+function mtdOpen(projId, truckId){
+  const t=mtdTruck(projId, truckId);
+  if(!t){ toast('Truck not found'); return; }
+  MTD={ projId, truckId,
+    rows:(t.items||[]).map(it=>({
+      desc:it.desc||'', qty:1,
+      L:it.L||0, W:it.W||0, H:it.H||0, weight:it.weight||0
+    }))
+  };
+  if(!MTD.rows.length) MTD.rows.push({desc:'',qty:1,L:0,W:0,H:0,weight:0});
+  mtdRender();
+  document.getElementById('modalBg').classList.add('show');
+}
+function mtdAddRow(){ MTD.rows.push({desc:'',qty:1,L:0,W:0,H:0,weight:0}); mtdRender(); }
+function mtdDelRow(i){ MTD.rows.splice(i,1); if(!MTD.rows.length) MTD.rows.push({desc:'',qty:1,L:0,W:0,H:0,weight:0}); mtdRender(); }
+function mtdSet(i, field, value){
+  const r=MTD.rows[i]; if(!r) return;
+  if(field==='desc') r.desc=value;
+  else if(field==='qty') r.qty=Math.max(1, parseInt(value)||1);
+  else if(field==='weight') r.weight=mtdParseWt(value);
+  else r[field]=mtdParseLen(value);
+  mtdRender();
+}
+function mtdTotals(){
+  let len=0, wt=0, w=0, h=0, pcs=0;
+  (MTD.rows||[]).forEach(r=>{
+    const q=Math.max(1,parseInt(r.qty)||1);
+    pcs+=q; len+=(r.L||0)*q; wt+=(r.weight||0)*q;
+    w=Math.max(w, r.W||0); h=Math.max(h, r.H||0);
+  });
+  return {len, wt, w, h, pcs};
+}
+function mtdRender(){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('xwide'); modal.classList.add('wide');
+
+  const t=mtdTruck(MTD.projId, MTD.truckId) || {};
+  const spec=(typeof trailerSpec==='function')?trailerSpec(t.type):null;
+  const tot=mtdTotals();
+
+  const rows=MTD.rows.map((r,i)=>`<tr>
+      <td><input class="mini-input" style="min-width:150px" value="${esc(r.desc)}" placeholder="Product / description" oninput="MTD.rows[${i}].desc=this.value"></td>
+      <td><input class="mini-num" style="width:56px" type="number" min="1" value="${r.qty||1}" onchange="mtdSet(${i},'qty',this.value)"></td>
+      <td><input class="mini-input" style="width:86px" value="${r.L?mtdFt(r.L):''}" placeholder="L" onchange="mtdSet(${i},'L',this.value)"></td>
+      <td><input class="mini-input" style="width:86px" value="${r.W?mtdFt(r.W):''}" placeholder="W" onchange="mtdSet(${i},'W',this.value)"></td>
+      <td><input class="mini-input" style="width:86px" value="${r.H?mtdFt(r.H):''}" placeholder="H" onchange="mtdSet(${i},'H',this.value)"></td>
+      <td><input class="mini-input" style="width:96px" value="${r.weight?Math.round(r.weight).toLocaleString():''}" placeholder="lbs" onchange="mtdSet(${i},'weight',this.value)"></td>
+      <td><button class="rowbtn del" onclick="mtdDelRow(${i})">✕</button></td>
+    </tr>`).join('');
+
+  const capNote = spec
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">${esc(t.type)} — deck ${mtdFt(spec.len)} · single-piece ${spec.single.toLocaleString()} lbs · multi-piece ${spec.multi.toLocaleString()} lbs</div>`
+    : `<div style="font-size:11px;color:var(--muted);margin-top:6px">${t.type?('Specialized trailer — no preset limits'):'No trailer type set on this truck yet'}</div>`;
+
+  box.innerHTML=`<h3>📦 Product Dimensions — Truck ${esc(MTD.truckId)}</h3>
+    <div class="card-sub" style="margin-bottom:12px">Enter what's riding on this truck. Type dimensions however you like — <strong>48</strong>, <strong>48"</strong>, <strong>4'6"</strong> or <strong>4.5 ft</strong> all work (plain numbers are read as inches). Length used, max width/height and weight recalculate automatically.</div>
+    <div class="table-wrap"><table style="min-width:640px">
+      <thead><tr><th>Product</th><th style="width:60px">Qty</th><th style="width:96px">Length</th><th style="width:96px">Width</th><th style="width:96px">Height</th><th style="width:106px">Weight (ea)</th><th style="width:40px"></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <button class="rowbtn" style="margin-top:8px" onclick="mtdAddRow()">＋ Add Product</button>
+    <div class="card" style="margin:14px 0 0;padding:12px 15px;display:flex;gap:18px;flex-wrap:wrap;justify-content:space-around;text-align:center">
+      <div><div style="font-size:18px;font-weight:800;color:var(--ink)">${tot.pcs}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase">Pieces</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:var(--ink)">${mtdFt(tot.len)}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase">Length Used</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:var(--ink)">${mtdFt(tot.w)}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase">Max Width</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:var(--ink)">${mtdFt(tot.h)}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase">Max Height</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:var(--ink)">${Math.round(tot.wt).toLocaleString()}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase">Total lbs</div></div>
+    </div>
+    ${capNote}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="width:auto" onclick="mtdSave()">Save Products</button>
+    </div>`;
+}
+function mtdSave(){
+  const p=pcProject(MTD.projId); if(!p){ closeModal(); return; }
+  const t=(p.trucks||[]).find(x=>x.id===MTD.truckId); if(!t){ closeModal(); return; }
+  const items=[];
+  MTD.rows.forEach(r=>{
+    const hasAny=(r.desc||'').trim() || r.L || r.W || r.H || r.weight;
+    if(!hasAny) return;
+    const q=Math.max(1, parseInt(r.qty)||1);
+    for(let i=0;i<q;i++){
+      items.push({ pkg:(r.desc||'Item'), desc:(r.desc||'Item'),
+        L:r.L||0, W:r.W||0, H:r.H||0, weight:r.weight||0, manualItem:true });
+    }
+  });
+  t.items=items;
+  try{ if(typeof pcRecalcTruck==='function') pcRecalcTruck(t); }catch(e){}
+  pcSaveProject(p); closeModal(); route();
+  toast(items.length? ('Saved '+items.length+' piece'+(items.length===1?'':'s')+' on '+MTD.truckId) : ('Cleared products on '+MTD.truckId));
+}
+
+/* ===================================================================
+   2) TRUCK BREAKDOWN — add the 📦 button, hide internal reference figures
+   -------------------------------------------------------------------
+   Removed from the table (still enforced behind the scenes):
+     • "/ 53'0""      the trailer's deck-length limit
+     • "(load 10'9")"  the loaded height
+     • "cap 50,000 (single)"  the payload capacity line
+   =================================================================== */
+(function mtdWrapTrucksBody(){
+  const _body = window.pcTrucksBody;
+  if(typeof _body!=='function') return;
+
+  window.pcTrucksBody = function(p){
+    if(p.awarded) return _body.apply(this, arguments);   /* live tracking view untouched */
+
+    const needCount=(p.trucks||[]).filter(t=>!t.type).length;
+    const maxSingle=(typeof TRAILER_MAX_SINGLE!=='undefined')?TRAILER_MAX_SINGLE:80000;
+    const banner = needCount ? `<div class="alert-box danger">
+        <h4>⚠️ Trailer Type Needed <span class="age-badge">${needCount}</span></h4>
+        <div class="a-sub">These pieces exceed every standard trailer's published limit. Pick a trailer in the <strong>Type</strong> column below — or choose <strong>✎ Type a specialized trailer…</strong> to enter one by hand.</div>
+      </div>` : '';
+
+    const truckRows=(p.trucks||[]).map(t=>{
+      const manual=!!t.manual;
+      const n=(t.items||[]).length;
+      const flagFn=(typeof pcFlagPill==='function')?pcFlagPill:(f=>`<span class="pill loss">${f}</span>`);
+      const flags=(t.flags&&t.flags.length)?`<div style="margin-top:3px">${t.flags.map(flagFn).join(' ')}</div>`:'';
+      const typeCell = `<select id="tt-${t.id}" class="mini-input ${!t.type?'tbd-pick':''}" style="min-width:180px" onchange="pcSetTruckType('${p.id}','${t.id}',this.value)">${pcTrailerOptions(t.type)}</select>${manual?' <span class="pill vol">manual</span>':''}${flags}`;
+
+      const pkgBtn = `<button class="rowbtn" style="background:#eef2f8;color:var(--accent2)" onclick="mtdOpen('${p.id}','${t.id}')" title="Enter the product dimensions on this truck">📦 ${n? (n+' pc'+(n===1?'':'s')) : 'Add'}</button>`;
+
+      /* --- internal reference figures removed from these three cells --- */
+      const lenU = inchesToFtIn(t.usedLen||0);
+      const mw   = inchesToFtIn(t.maxW||0);
+      const mh   = inchesToFtIn(t.maxH||0);
+      const wt   = Math.round(t.weight||0).toLocaleString()+' lbs';
+
+      return `<tr class="${!t.type?'trk-tbd':''}">
+        <td><strong>${t.id}</strong></td>
+        <td>${typeCell}</td>
+        <td>${pkgBtn}</td>
+        <td>${lenU}</td>
+        <td>${mw}</td>
+        <td>${mh}</td>
+        <td>${wt}</td>
+        <td><div style="display:flex;align-items:center;gap:4px">
+          <span class="muted-sub">$</span>
+          <input type="number" min="0" step="0.01" class="mini-num" style="width:96px" value="${t.rate!==''&&t.rate!=null?t.rate:''}" placeholder="0.00" onchange="pcSetTruckRate('${p.id}','${t.id}',this.value)">
+          <button class="rowbtn" title="Copy this rate to all ${esc(t.type||'same-type')} trucks" onclick="pcCopyRateToType('${p.id}','${t.id}')">\u2398 type</button>
+        </div></td>
+        <td>${manual?`<button class="rowbtn del" title="Remove manual truck" onclick="pcTruckDel('${p.id}','${t.id}')">\u2715</button>`:''}</td>
+      </tr>`;
+    }).join('');
+
+    const typeSum=pcTypeSummary(p).map(s=>{
+      const uniform = s.rates.size===1 ? [...s.rates][0] : '';
+      const uid=pcTruckGroupSan(s.type,s.ow,s.oh);
+      const flagPills=(s.ow?'<span class="pill loss" style="margin-left:4px">Over-width</span>':'')+(s.oh?'<span class="pill loss" style="margin-left:4px">Over-height</span>':'');
+      const isCustom=(typeof pcIsCustomType==='function')&&pcIsCustomType(s.type);
+      const label = s.type
+        ? `<span class="pill type">${esc(s.type)}</span>${isCustom?' <span class="pill vol" title="Entered manually">✎</span>':''}`
+        : `<span class="pill pending">Trailer TBD</span>`;
+      return `<tr class="${!s.type?'trk-tbd':''}">
+        <td>${label}${flagPills}</td>
+        <td>${s.qty}</td>
+        <td>${inchesToFtIn(s.len)}</td>
+        <td>${inchesToFtIn(s.maxW)}</td>
+        <td>${inchesToFtIn(s.maxH)}</td>
+        <td><div style="display:flex;gap:5px;align-items:center">
+          <select class="mini-input ${!s.type?'tbd-pick':''}" id="ty-${uid}" style="min-width:175px" onchange="if(this.value==='__custom')pcEditCustomGroupType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0},'${uid}')">${pcTrailerOptions(s.type)}</select>
+          <button class="rowbtn" style="background:#eef2f8;color:var(--accent2)" title="Apply this trailer type to all ${s.qty} truck(s) in this group" onclick="pcApplyGroupType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0},document.getElementById('ty-${uid}').value)">Change all ${s.qty}</button>
+        </div></td>
+        <td>${s.amount?pcMoney(s.amount):'\u2014'}</td>
+        <td><div class="copy-rate-wrap"><span class="muted-sub">$</span>
+          <input type="number" min="0" step="0.01" class="mini-num" id="${uid}" value="${uniform!==''?uniform:''}" placeholder="rate / truck">
+          <button class="rowbtn" onclick="pcApplyGroupRate('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">Apply to all ${s.qty}</button>
+          <button class="rowbtn" style="background:#e3f6e9;color:var(--green)" title="Price one truck, then apply to all ${s.qty}" onclick="openGetPriceTruckType('${p.id}','${jsq(s.type)}',${s.ow?1:0},${s.oh?1:0})">💲 Pricing Tool</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+
+    return `
+      ${banner}
+      <div class="card-sub">Click <strong>📦</strong> on any truck to enter its product dimensions — description, quantity, L × W × H and weight. Length used, max width/height and total weight update automatically, and the trailer's limits are still checked in the background.</div>
+      <div class="table-wrap"><table style="min-width:1040px">
+        <thead><tr><th>Truck</th><th style="width:200px">Type</th><th style="width:110px">Product</th><th>Length Used</th><th>Max W</th><th>Max H</th><th>Weight</th><th style="width:230px">Rate / Truck</th><th></th></tr></thead>
+        <tbody>${truckRows||'<tr><td colspan="9" class="empty">No trucks yet. Use ＋ Add Truck to start building this project.</td></tr>'}</tbody>
+      </table></div>
+      <div style="text-align:right;margin-top:10px;font-weight:700;color:var(--ink)">Truck Subtotal (this page): ${pcMoney(pcTruckSubtotalPage(p))}</div>
+      <div style="margin-top:16px"><h3 style="font-size:14px;color:var(--ink);margin-bottom:8px">Truck Type Summary &amp; Quick Pricing</h3>
+        <div class="card-sub" style="margin:0 0 8px">Each row groups trucks with the same trailer type and over-dimension profile. Use <strong>Change all</strong> to switch that entire group — every truck sharing those dimensions updates together.</div>
+        <div class="table-wrap"><table style="min-width:900px">
+          <thead><tr><th>Type</th><th># Trucks</th><th>Total Length</th><th>Max W</th><th>Max H</th><th style="width:300px">Change Trailer Type</th><th>Amount</th><th>Copy Rate to Group</th></tr></thead>
+          <tbody>${typeSum||'<tr><td colspan="8" class="empty">\u2014</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+  };
+})();
+
+/* ===================================================================
+   3) LIVE-TRACKING VIEW — 📦 button there too, once awarded
+   =================================================================== */
+(function mtdWrapTrackBody(){
+  const _track = window.pcTrucksTrackBody;
+  if(typeof _track!=='function') return;
+  window.pcTrucksTrackBody = function(p){
+    let html=_track.apply(this, arguments);
+    try{
+      (p.trucks||[]).forEach(t=>{
+        const anchor=`<td><strong>${t.id}</strong>`;
+        const i=html.indexOf(anchor);
+        if(i<0) return;
+        const end=html.indexOf('</td>', i);
+        if(end<0) return;
+        const btn=`<div style="margin-top:4px"><button class="rowbtn" style="background:#eef2f8;color:var(--accent2)" onclick="mtdOpen('${p.id}','${t.id}')" title="Product dimensions on this truck">📦 ${(t.items||[]).length||'Add'}</button></div>`;
+        html=html.slice(0,end)+btn+html.slice(end);
+      });
+    }catch(e){ console.error('track pkg btn',e); }
+    return html;
+  };
+})();
+
+/* ===================================================================
+   4) MANUAL PROJECT — packing list section shows manually-entered pieces
+   =================================================================== */
+(function mtdWrapPacking(){
+  const _pack = window.pcPackingBody;
+  if(typeof _pack!=='function') return;
+  window.pcPackingBody = function(p){
+    const rows=(p.trucks||[]).flatMap(t=>(t.items||[]).map(it=>`<tr>
+        <td>${t.id}</td><td>${esc(String(it.pkg||it.desc||'Item'))}</td><td>${esc(it.desc||'')}</td>
+        <td>${inchesToFtIn(it.L||0)}</td><td>${inchesToFtIn(it.W||0)}</td><td>${inchesToFtIn(it.H||0)}</td>
+        <td>${(it.weight||0).toLocaleString()} lbs</td>
+        <td><button class="rowbtn" onclick="mtdOpen('${p.id}','${t.id}')">✏️ Edit</button></td>
+      </tr>`)).join('');
+    if(!rows) return `<div class="card-sub">No products entered yet. Click <strong>📦</strong> on any truck in the breakdown above to add its product dimensions.</div>`;
+    return `
+      <div class="card-sub">Every piece with dimensions converted to feet-inches and its assigned truck. Click <strong>Edit</strong> to change the products on a truck.</div>
+      <div class="table-wrap"><table style="min-width:760px">
+        <thead><tr><th>Truck</th><th>Pkg</th><th>Description</th><th>L</th><th>W</th><th>H</th><th>Weight</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  };
+})();
+
+/* expose for inline handlers */
+window.mtdOpen=mtdOpen; window.mtdRender=mtdRender; window.mtdAddRow=mtdAddRow;
+window.mtdDelRow=mtdDelRow; window.mtdSet=mtdSet; window.mtdSave=mtdSave;
+window.mtdParseLen=mtdParseLen; window.mtdParseWt=mtdParseWt; window.mtdFt=mtdFt;
+
+try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
+</script>
 
 </body>
 </html>
