@@ -12085,6 +12085,938 @@ window.impAux=impAux; window.impStripCard=impStripCard;
 
 try{ if(typeof buildSidebar==='function') buildSidebar(); if(typeof route==='function') route(); }catch(e){}
 </script>
+<script>
+/* ===================================================================
+   0) SCOPE DETECTION  — the root cause of the bug
+   -------------------------------------------------------------------
+   The old repScope() read FUNNEL_SCOPE, but route() resets that flag to
+   'nse' at the end of every render. Because saveOppForm() calls route()
+   internally, by the time the stamping code ran the scope had already
+   flipped back — so the new record was never tagged with the rep and
+   fell through to the NSE funnel. We now key off the ACTIVE PAGE and
+   the LOGGED-IN IDENTITY, which never get reset mid-flight.
+   =================================================================== */
+window.repScope = function(){
+  if(typeof FUNNEL_SCOPE!=='undefined' && FUNNEL_SCOPE==='rep') return true;
+  if(typeof CURRENT_PAGE!=='undefined' && CURRENT_PAGE==='repprospects') return true;
+  return false;
+};
+
+/* Who should own anything created right now? */
+function rpfOwnerDefault(){
+  try{
+    if(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep' && ACTIVE_REP && ACTIVE_REP!=='all') return ACTIVE_REP;
+    if(typeof CURRENT_PAGE!=='undefined' && CURRENT_PAGE==='repprospects'){
+      if(typeof RPF_REP!=='undefined' && RPF_REP && RPF_REP!=='all') return RPF_REP;
+    }
+  }catch(e){}
+  return '';
+}
+function rpfRepLocked(){ return (typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep' && ACTIVE_REP && ACTIVE_REP!=='all'); }
+function rpfOwnerLabel(u){ return u ? repName(u) : 'Office / NSE funnel'; }
+
+/* Stamp every record created since `before` with an owner. */
+function rpfApplyOwner(beforeIds, owner){
+  try{
+    const arr=oppList(); let n=0;
+    arr.forEach(o=>{
+      if(!beforeIds.has(o.id)){
+        o.rep = owner || '';
+        o.ownerType = owner ? 'rep' : 'office';
+        n++;
+      }
+    });
+    if(n) oppSave(arr);
+    return n;
+  }catch(e){ console.error('rpfApplyOwner',e); return 0; }
+}
+
+/* ===================================================================
+   1) ADD OPPORTUNITY  — owner picker + reliable stamping
+   =================================================================== */
+(function rpfWrapAddForm(){
+  const _open = window.openOppForm;
+  if(typeof _open!=='function') return;
+
+  window.openOppForm = function(id){
+    _open.apply(this, arguments);
+    try{
+      const box=document.getElementById('modalBox'); if(!box) return;
+      const existing = id ? (typeof oppById==='function' ? oppById(id) : null) : null;
+      const cur = existing ? (existing.rep||'') : rpfOwnerDefault();
+      const reps = DB.reps()||[];
+      const locked = rpfRepLocked();
+
+      const inner = locked
+        ? `<div class="tag" style="padding:9px 12px;font-size:14px">👤 ${esc(repName(ACTIVE_REP))} <span style="color:var(--muted);font-weight:500">· your funnel</span></div>
+           <input type="hidden" id="of_rep" value="${esc(ACTIVE_REP)}">`
+        : `<select id="of_rep">
+             <option value="">— Office / NSE funnel (no rep) —</option>
+             ${reps.map(r=>`<option value="${r.u}" ${cur===r.u?'selected':''}>${esc(r.name)}${r.role==='ART'?' (ART)':''}</option>`).join('')}
+           </select>`;
+
+      const html = `<div class="form-row" id="ofRepRow">
+          <div class="field-c" style="grid-column:1/-1">
+            <label>👤 Owner — whose funnel does this belong to?</label>
+            ${inner}
+            <div class="detected" style="color:var(--accent2)">${cur?('Saves to '+esc(repName(cur))+"'s Rep Prospect Funnel."):'Saves to the office / NSE Prospect Funnel.'}</div>
+          </div>
+        </div>`;
+
+      const firstRow = box.querySelector('.form-row');
+      if(firstRow) firstRow.insertAdjacentHTML('beforebegin', html);
+      else { const h=box.querySelector('h3'); if(h) h.insertAdjacentHTML('afterend', html); }
+    }catch(e){ console.error('owner picker',e); }
+  };
+
+  const _save = window.saveOppForm;
+  if(typeof _save!=='function') return;
+
+  window.saveOppForm = function(){
+    /* read the owner BEFORE the original runs — it closes the modal */
+    let owner = rpfOwnerDefault();
+    const sel = document.getElementById('of_rep');
+    if(sel) owner = sel.value || '';
+    const editingId = (typeof OPP_EDIT!=='undefined') ? OPP_EDIT : null;
+    const before = new Set(oppList().map(o=>o.id));
+
+    const r = _save.apply(this, arguments);
+
+    try{
+      const arr=oppList(); let changed=false, added=0;
+      arr.forEach(o=>{
+        if(!before.has(o.id)){ o.rep=owner||''; o.ownerType=owner?'rep':'office'; changed=true; added++; }
+      });
+      if(editingId && sel){
+        const o=arr.find(x=>x.id===editingId);
+        if(o && (o.rep||'')!==(owner||'')){ o.rep=owner||''; o.ownerType=owner?'rep':'office'; changed=true; }
+      }
+      if(changed){ oppSave(arr); route(); if(added) toast('Saved to '+rpfOwnerLabel(owner)); }
+    }catch(e){ console.error('saveOppForm owner',e); }
+    return r;
+  };
+})();
+
+/* ===================================================================
+   2) PASTE & PARSE  — stamp the working rep
+   =================================================================== */
+(function rpfWrapParse(){
+  const _commit = window.commitOppParse;
+  if(typeof _commit!=='function') return;
+  window.commitOppParse = function(){
+    const owner = rpfOwnerDefault();
+    const before = new Set(oppList().map(o=>o.id));
+    const r = _commit.apply(this, arguments);
+    const n = rpfApplyOwner(before, owner);
+    if(n){ route(); if(owner) toast(n+' opportunit'+(n===1?'y':'ies')+' added to '+repName(owner)+"'s funnel"); }
+    return r;
+  };
+})();
+
+/* ===================================================================
+   3) IMPORTS  — JSON + Funnel CSV stamp the working rep
+   =================================================================== */
+(function rpfWrapImports(){
+  const _appr = window.approveImport;
+  if(typeof _appr==='function'){
+    window.approveImport = function(){
+      const owner = rpfOwnerDefault();
+      const before = new Set(oppList().map(o=>o.id));
+      const r = _appr.apply(this, arguments);
+      if(owner){ const n=rpfApplyOwner(before, owner); if(n){ route(); toast(n+' imported opportunit'+(n===1?'y':'ies')+' filed under '+repName(owner)); } }
+      return r;
+    };
+  }
+  const _csv = window.approveFunnelCsv;
+  if(typeof _csv==='function'){
+    window.approveFunnelCsv = function(){
+      const owner = rpfOwnerDefault();
+      const before = new Set(oppList().map(o=>o.id));
+      const r = _csv.apply(this, arguments);
+      if(owner){ const n=rpfApplyOwner(before, owner); if(n){ route(); toast(n+' CSV opportunit'+(n===1?'y':'ies')+' filed under '+repName(owner)); } }
+      return r;
+    };
+  }
+})();
+
+/* ===================================================================
+   4) DUPLICATE CONTROL  — scoped per funnel
+   -------------------------------------------------------------------
+   A rep working an account should not be blocked because the office /
+   NSE funnel already lists it — the two funnels are separate books.
+   Duplicates are now only enforced WITHIN the funnel being worked.
+   =================================================================== */
+(function rpfScopeDupes(){
+  function inScope(o){
+    const owner = rpfOwnerDefault();
+    if(owner) return (o.rep||'')===owner;                 /* rep's own book */
+    if(typeof CURRENT_PAGE!=='undefined' && CURRENT_PAGE==='repprospects'){
+      const r = (typeof RPF_REP!=='undefined')?RPF_REP:'all';
+      return !!o.rep && (r==='all' || o.rep===r);
+    }
+    return !o.rep;                                        /* office / NSE book */
+  }
+  window.rpfDupInScope = inScope;
+
+  const _set = window.dupExistingNameSet;
+  if(typeof _set==='function'){
+    window.dupExistingNameSet = function(){
+      const s=new Set();
+      (oppList()||[]).forEach(o=>{ if(!inScope(o)) return; const k=dupKey(o.company); if(k) s.add(k); });
+      return s;
+    };
+  }
+  const _find = window.dupFindExisting;
+  if(typeof _find==='function'){
+    window.dupFindExisting = function(name){
+      const k=dupKey(name); if(!k) return null;
+      return (oppList()||[]).find(o=>inScope(o) && dupKey(o.company)===k) || null;
+    };
+  }
+  /* the Find Duplicates scanner groups within a funnel, never across */
+  const _scan = window.dupScan;
+  if(typeof _scan==='function'){
+    window.dupScan = function(){
+      const byKey={};
+      (oppList()||[]).forEach(o=>{
+        const k=dupKey(o.company); if(!k) return;
+        const bucket = k+'||'+(o.rep||'__office');        /* same funnel only */
+        (byKey[bucket]=byKey[bucket]||[]).push(o);
+      });
+      const groups=[];
+      Object.keys(byKey).forEach(b=>{
+        const arr=byKey[b]; if(arr.length<2) return;
+        const ranked=arr.slice().sort((a,b2)=>dupScore(b2)-dupScore(a));
+        groups.push({ key:b, label:ranked[0].company+(ranked[0].rep?(' · '+repName(ranked[0].rep)):' · Office funnel'), items:ranked, keep:ranked[0].id });
+      });
+      groups.sort((a,b)=>b.items.length-a.items.length || a.label.localeCompare(b.label));
+      return groups;
+    };
+  }
+})();
+
+/* ===================================================================
+   5) CLAIM OPPORTUNITIES  — pull mis-filed records into a rep's funnel
+   =================================================================== */
+let RPF_CLAIM_SEL = {};
+function rpfClaimOpen(){
+  RPF_CLAIM_SEL = {};
+  rpfClaimRender();
+  document.getElementById('modalBg').classList.add('show');
+}
+function rpfClaimTarget(){
+  if(rpfRepLocked()) return ACTIVE_REP;
+  if(typeof RPF_REP!=='undefined' && RPF_REP && RPF_REP!=='all') return RPF_REP;
+  return '';
+}
+function rpfClaimToggle(id,on){ RPF_CLAIM_SEL[id]=!!on; rpfClaimRender(); }
+function rpfClaimAll(on){
+  const pool=oppList().filter(o=>!o.rep);
+  pool.forEach(o=>RPF_CLAIM_SEL[o.id]=!!on);
+  rpfClaimRender();
+}
+function rpfClaimSetTarget(v){ if(typeof RPF_REP!=='undefined') RPF_REP=v; rpfClaimRender(); }
+function rpfClaimRender(){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('xwide'); modal.classList.add('wide');
+
+  const target=rpfClaimTarget();
+  const pool=oppList().filter(o=>!o.rep).sort((a,b)=>(+b.likelihood||0)-(+a.likelihood||0)||String(a.company).localeCompare(b.company));
+  const picked=pool.filter(o=>RPF_CLAIM_SEL[o.id]).length;
+  const reps=DB.reps()||[];
+
+  const targetPick = rpfRepLocked()
+    ? `<div class="tag" style="padding:9px 12px;font-size:14px">👤 ${esc(repName(ACTIVE_REP))}</div>`
+    : `<select style="max-width:260px" onchange="rpfClaimSetTarget(this.value)">
+         <option value="all" ${!target?'selected':''}>— pick a rep —</option>
+         ${reps.map(r=>`<option value="${r.u}" ${target===r.u?'selected':''}>${esc(r.name)}${r.role==='ART'?' (ART)':''}</option>`).join('')}
+       </select>`;
+
+  const rows = pool.length ? pool.map(o=>{
+    const f=(typeof FUNNEL_MAP!=='undefined')?(FUNNEL_MAP[oppStage(o)]||{}):{};
+    return `<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;cursor:pointer;text-transform:none;letter-spacing:0;font-weight:400;background:${RPF_CLAIM_SEL[o.id]?'rgba(27,135,63,.08)':'var(--card)'}">
+      <input type="checkbox" style="width:auto" ${RPF_CLAIM_SEL[o.id]?'checked':''} onchange="rpfClaimToggle('${o.id}',this.checked)">
+      <span style="flex:1">
+        <strong style="color:var(--ink)">${esc(o.company)}</strong>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(o.broker||'—')}${o.office?(' · '+esc(o.office)):''}${f.label?(' · '+f.label):''}${(o.notesLog||[]).length?(' · 📝 '+o.notesLog.length):''}</div>
+      </span>
+      <span style="font-weight:800;color:var(--accent)">${esc(o.likelihood||'—')}</span>
+    </label>`;
+  }).join('') : `<div class="empty" style="padding:24px">✅ Nothing sitting in the office / NSE funnel — every opportunity already has an owner.</div>`;
+
+  box.innerHTML=`<h3>📥 Claim Opportunities</h3>
+    <div class="card-sub" style="margin-bottom:12px">Opportunities currently sitting on the <strong>office / NSE funnel</strong> with no rep owner. Tick the ones that belong to a rep and claim them — they move onto that rep's funnel and disappear from the NSE funnel.</div>
+    <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+      <div><label style="margin-bottom:6px">Claim for</label>${targetPick}</div>
+      <div style="flex:1"></div>
+      <div class="filterbar" style="margin:0">
+        <button class="chip" onclick="rpfClaimAll(true)">Select all</button>
+        <button class="chip" onclick="rpfClaimAll(false)">Select none</button>
+      </div>
+      <span style="font-size:12px;color:var(--muted);margin-bottom:8px">${picked} of ${pool.length} selected</span>
+    </div>
+    <div style="max-height:46vh;overflow:auto">${rows}</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="width:auto${(!picked||!target)?';opacity:.5;pointer-events:none':''}" onclick="rpfClaimCommit()">📥 Claim ${picked} for ${esc(target?repName(target):'…')}</button>
+    </div>`;
+}
+function rpfClaimCommit(){
+  const target=rpfClaimTarget();
+  if(!target){ toast('Pick a rep to claim for'); return; }
+  const ids=Object.keys(RPF_CLAIM_SEL).filter(k=>RPF_CLAIM_SEL[k]);
+  if(!ids.length){ toast('Select at least one opportunity'); return; }
+  const arr=oppList(); let n=0;
+  arr.forEach(o=>{ if(ids.indexOf(o.id)>=0 && !o.rep){ o.rep=target; o.ownerType='rep'; n++; } });
+  oppSave(arr);
+  RPF_CLAIM_SEL={};
+  closeModal(); route();
+  toast('Claimed '+n+' opportunit'+(n===1?'y':'ies')+' for '+repName(target));
+}
+
+/* ===================================================================
+   6) REP FUNNEL PAGE  — ownership banner + Claim button
+   =================================================================== */
+(function rpfWrapPage(){
+  const _page = window.pageRepFunnel;
+  if(typeof _page!=='function') return;
+  window.pageRepFunnel = function(){
+    let html=_page.apply(this, arguments);
+    try{
+      const owner=rpfOwnerDefault();
+      const orphans=oppList().filter(o=>!o.rep).length;
+      const banner=`<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-left:4px solid var(--green)">
+        <div style="font-size:13px">
+          <strong style="color:var(--ink)">Adding here saves to:</strong>
+          ${owner?`<span class="pill" style="background:var(--green);color:#fff;margin-left:6px">👤 ${esc(repName(owner))}</span>`
+                 :`<span class="pill pending" style="margin-left:6px">⚠️ Pick a rep above first</span>`}
+          <span style="color:var(--muted);margin-left:8px">This funnel is completely separate from the NSE Prospect Funnel.</span>
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" style="width:auto" onclick="rpfClaimOpen()">📥 Claim Opportunities${orphans?` <span class="age-badge warn">${orphans}</span>`:''}</button>
+      </div>`;
+      const anchor='<div class="page-sub">';
+      const end=html.indexOf('</div>', html.indexOf(anchor));
+      if(end>=0) html = html.slice(0,end+6) + banner + html.slice(end+6);
+      else html = banner + html;
+    }catch(e){ console.error(e); }
+    return html;
+  };
+})();
+
+/* ===================================================================
+   7) SAFETY NET  — a logged-in Rep never writes to the NSE funnel
+   -------------------------------------------------------------------
+   Anything created anywhere in the app while a Rep identity is active
+   gets stamped with that rep, even if it came from a code path this
+   patch does not wrap directly.
+   =================================================================== */
+(function rpfGuardSave(){
+  const _save = DB.saveOpps;
+  if(typeof _save!=='function') return;
+  DB.saveOpps = function(arr){
+    try{
+      if(rpfRepLocked() && Array.isArray(arr)){
+        arr.forEach(o=>{ if(o && o.rep===undefined) { o.rep=ACTIVE_REP; o.ownerType='rep'; } });
+      }
+    }catch(e){}
+    return _save.call(DB, arr);
+  };
+})();
+
+/* expose for inline handlers */
+window.rpfOwnerDefault=rpfOwnerDefault; window.rpfRepLocked=rpfRepLocked; window.rpfApplyOwner=rpfApplyOwner;
+window.rpfClaimOpen=rpfClaimOpen; window.rpfClaimRender=rpfClaimRender; window.rpfClaimToggle=rpfClaimToggle;
+window.rpfClaimAll=rpfClaimAll; window.rpfClaimSetTarget=rpfClaimSetTarget; window.rpfClaimCommit=rpfClaimCommit;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   1) REMOVE THE REP FUNNEL BANNER
+   =================================================================== */
+(function rpfDropBanner(){
+  /* Re-wrap pageRepFunnel and strip the banner the v9 patch injected. */
+  const _page = window.pageRepFunnel;
+  if(typeof _page!=='function') return;
+  window.pageRepFunnel = function(){
+    let html=_page.apply(this, arguments);
+    try{
+      const needle='Adding here saves to:';
+      const at=html.indexOf(needle);
+      if(at<0) return html;
+      const start=html.lastIndexOf('<div class="card', at);
+      if(start<0) return html;
+      /* walk forward counting div depth to find the matching close tag */
+      let cursor=start, depth=0, end=-1;
+      const openRe=/<div\b/gi, closeRe=/<\/div>/gi;
+      while(cursor<html.length){
+        openRe.lastIndex=cursor; closeRe.lastIndex=cursor;
+        const o=openRe.exec(html), c=closeRe.exec(html);
+        const oi=o?o.index:Infinity, ci=c?c.index:Infinity;
+        if(oi===Infinity && ci===Infinity) break;
+        if(oi<ci){ depth++; cursor=oi+4; }
+        else { depth--; cursor=ci+6; if(depth===0){ end=cursor; break; } }
+      }
+      if(end>0) html = html.slice(0,start)+html.slice(end);
+    }catch(e){ console.error('banner strip',e); }
+    return html;
+  };
+})();
+
+/* ===================================================================
+   2) ROOT CAUSE — OFFICE REGISTRATION
+   -------------------------------------------------------------------
+   Your backup's `opps` array imports correctly and every record lands in
+   localStorage. The problem is downstream, in the VIEW:
+
+     • The funnel's office dropdown is built from DB.oppOffices().
+     • Older backups carry offices on the opportunities themselves that
+       were never written into that oppOffices list — in your file,
+       "HQ Richmond", "HQ Werner" and "HQ Stauffer" all appear on opps but
+       are missing from oppOffices, which only holds Phoenix, Denver,
+       Portland, Las Vegas, Charlotte, HQ TEAM VON HOLLE and HQ Von Holle.
+     • Worse, "HQ TEAM VON HOLLE" and "HQ Von Holle" are two spellings of
+       the same office, so those records split across two buckets.
+     • For an NSE identity, the scoping patch narrows the funnel further —
+       to only the offices attached to that NSE's reps. Any opportunity in
+       an unregistered office is filtered out of every view.
+
+   Net effect: the data restores, but you cannot see it. These helpers
+   reconcile the office list against the actual opportunities.
+   =================================================================== */
+function fxOfficesOnOpps(){
+  const s=new Set();
+  (oppList()||[]).forEach(o=>{ const v=(o.office||'').trim(); if(v) s.add(v); });
+  return [...s].sort((a,b)=>a.localeCompare(b));
+}
+function fxRegisteredOffices(){
+  try{ return (DB.oppOffices()||[]).map(o=>String(o||'').trim()).filter(Boolean); }catch(e){ return []; }
+}
+function fxUnregisteredOffices(){
+  const reg=new Set(fxRegisteredOffices().map(o=>o.toLowerCase()));
+  return fxOfficesOnOpps().filter(o=>!reg.has(o.toLowerCase()));
+}
+function fxOfficeCounts(){
+  const c={};
+  (oppList()||[]).forEach(o=>{ const k=(o.office||'(no office)').trim()||'(no office)'; c[k]=(c[k]||0)+1; });
+  return c;
+}
+/* opportunities with NO office at all — invisible under any office filter */
+function fxNoOfficeOpps(){ return (oppList()||[]).filter(o=>!(o.office||'').trim()); }
+
+/* register every office found on the opportunities */
+function fxRegisterMissingOffices(){
+  const missing=fxUnregisteredOffices();
+  if(!missing.length) return 0;
+  const set=new Set(fxRegisteredOffices());
+  missing.forEach(o=>set.add(o));
+  DB.saveOppOffices([...set].sort((a,b)=>a.localeCompare(b)));
+  return missing.length;
+}
+
+/* merge spelling variants of the same office (e.g. HQ TEAM VON HOLLE) */
+function fxOfficeKey(s){ return String(s||'').toLowerCase().replace(/\bteam\b/g,' ').replace(/[^a-z0-9]/g,''); }
+function fxFindOfficeVariants(){
+  const groups={};
+  fxOfficesOnOpps().concat(fxRegisteredOffices()).forEach(o=>{
+    const k=fxOfficeKey(o); if(!k) return;
+    groups[k]=groups[k]||new Set(); groups[k].add(o);
+  });
+  return Object.keys(groups).map(k=>[...groups[k]]).filter(a=>a.length>1);
+}
+function fxMergeOfficeVariants(){
+  const variants=fxFindOfficeVariants();
+  if(!variants.length) return 0;
+  const counts=fxOfficeCounts();
+  const arr=oppList(); let moved=0;
+  const keepList=[];
+  variants.forEach(list=>{
+    /* keep whichever spelling is used most on real records */
+    const keep=list.slice().sort((a,b)=>(counts[b]||0)-(counts[a]||0)||a.length-b.length)[0];
+    keepList.push(keep);
+    arr.forEach(o=>{
+      const cur=(o.office||'').trim();
+      if(cur && cur!==keep && list.indexOf(cur)>=0){ o.office=keep; moved++; }
+    });
+  });
+  if(moved) oppSave(arr);
+  /* prune the dropped spellings from the registered list */
+  const drop=new Set(); variants.forEach((list,i)=>list.forEach(o=>{ if(o!==keepList[i]) drop.add(o); }));
+  const clean=fxRegisteredOffices().filter(o=>!drop.has(o));
+  keepList.forEach(k=>{ if(clean.indexOf(k)<0) clean.push(k); });
+  DB.saveOppOffices(clean.sort((a,b)=>a.localeCompare(b)));
+  return moved;
+}
+
+/* ===================================================================
+   3) AUTO-REPAIR ON EVERY IMPORT
+   Any office arriving on an opportunity is registered immediately, so
+   restored records are visible the moment the import finishes.
+   =================================================================== */
+(function fxWrapImports(){
+  ['approveImport','approveFunnelCsv','importData'].forEach(fn=>{
+    const _f=window[fn];
+    if(typeof _f!=='function') return;
+    window[fn]=function(){
+      const r=_f.apply(this, arguments);
+      try{
+        const n=fxRegisterMissingOffices();
+        if(n){ route(); toast('Registered '+n+' office'+(n===1?'':'s')+' from the backup so their opportunities are visible'); }
+      }catch(e){ console.error('office repair',e); }
+      return r;
+    };
+  });
+  /* the legacy restore path writes straight to localStorage */
+  try{
+    const el=document.getElementById('importFile');
+    if(el) el.addEventListener('change', function(){ setTimeout(()=>{ try{ if(fxRegisterMissingOffices()) route(); }catch(e){} }, 900); });
+  }catch(e){}
+})();
+
+/* run the repair once on load, for backups already restored */
+(function fxRepairOnLoad(){
+  try{
+    const n=fxRegisterMissingOffices();
+    if(n) setTimeout(()=>toast('Funnel repair: registered '+n+' missing office'+(n===1?'':'s')),900);
+  }catch(e){ console.error(e); }
+})();
+
+/* ===================================================================
+   4) FUNNEL HEALTH  — see the store vs what is on screen, and repair
+   =================================================================== */
+function fxHealthOpen(){ fxHealthRender(); document.getElementById('modalBg').classList.add('show'); }
+function fxHealthRender(){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('xwide'); modal.classList.add('wide');
+
+  const all=oppList()||[];
+  const total=all.length;
+  const officeOpps=all.filter(o=>!o.rep).length;
+  const repOpps=all.filter(o=>!!o.rep).length;
+  let visible=0; try{ visible=(typeof oppFiltered==='function')?oppFiltered().length:0; }catch(e){}
+
+  const missing=fxUnregisteredOffices();
+  const noOffice=fxNoOfficeOpps();
+  const variants=fxFindOfficeVariants();
+  const counts=fxOfficeCounts();
+
+  const scopeNote=(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='nse')
+    ? `<div class="alert-box warn" style="margin-bottom:12px"><h4>🎯 You are working as an NSE</h4>
+        <div class="a-sub">NSE view is scoped to the offices attached to your claimed reps. Opportunities in any other office are hidden even when present. Offices visible to you right now: <strong>${(typeof oppOfficeList==='function'?oppOfficeList():[]).map(esc).join(', ')||'(none — no reps have offices assigned)'}</strong>. Switch to <strong>Manager</strong> in the top bar to see every office.</div></div>`
+    : '';
+
+  const rows=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).map(k=>{
+    const reg=fxRegisteredOffices().some(o=>o.toLowerCase()===k.toLowerCase());
+    const bad=(k==='(no office)')||!reg;
+    return `<tr${bad?' style="background:rgba(192,57,43,.08)"':''}>
+      <td><strong>${esc(k)}</strong></td>
+      <td style="text-align:center">${counts[k]}</td>
+      <td>${k==='(no office)'?'<span class="pill loss">no office set</span>':(reg?'<span class="pill won">registered</span>':'<span class="pill loss">not registered — hidden</span>')}</td>
+    </tr>`;
+  }).join('');
+
+  const varHtml = variants.length
+    ? `<div class="alert-box warn"><h4>⚠️ Duplicate Office Spellings (${variants.length})</h4>
+        <div class="a-sub">These look like the same office stored under different names, which splits their opportunities across two buckets.</div>
+        ${variants.map(v=>`<div style="font-size:13px">• ${v.map(x=>`<span class="tag">${esc(x)} (${counts[x]||0})</span>`).join(' ')}</div>`).join('')}</div>`
+    : '';
+
+  const missHtml = missing.length
+    ? `<div class="alert-box danger"><h4>🚨 Unregistered Offices (${missing.length})</h4>
+        <div class="a-sub">Opportunities carry these offices, but the funnel's office list does not — so those records are filtered out of every view. This is the usual reason a restored backup looks like it "lost" opportunities.</div>
+        ${missing.map(o=>`<div style="font-size:13px">• <strong>${esc(o)}</strong> — ${counts[o]||0} opportunit${(counts[o]||0)===1?'y':'ies'} hidden</div>`).join('')}</div>`
+    : '';
+
+  const noOffHtml = noOffice.length
+    ? `<div class="alert-box warn"><h4>⚠️ Opportunities With No Office (${noOffice.length})</h4>
+        <div class="a-sub">These have a blank office field and will not appear under any office filter. Assign them an office below.</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+          <div style="flex:1;min-width:180px"><label>Assign all to office</label>
+            <select id="fxNoOffPick">${fxRegisteredOffices().map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>
+          <button class="btn btn-primary" style="width:auto" onclick="fxAssignNoOffice()">Assign ${noOffice.length}</button>
+        </div></div>`
+    : '';
+
+  box.innerHTML=`<h3>🩺 Funnel Health</h3>
+    <div class="card-sub" style="margin-bottom:12px">Compares what is actually stored against what the funnel is showing you. If a restored backup looks short, the cause is almost always an office that was never registered.</div>
+    ${scopeNote}
+    <div class="kpi-grid" style="margin-bottom:14px">
+      ${kpi('In Storage',total,'b-navy','all opportunities')}
+      ${kpi('Visible Now',visible,'b-blue','current filters')}
+      ${kpi('Office / NSE Funnel',officeOpps,'b-green')}
+      ${kpi('Rep Funnel',repOpps,'b-orange')}
+    </div>
+    ${missHtml}${varHtml}${noOffHtml}
+    <div class="card" style="margin:0">
+      <div class="card-head"><h3>Opportunities by Office</h3></div>
+      <div class="table-wrap"><table style="min-width:440px">
+        <thead><tr><th>Office</th><th style="text-align:center">Opportunities</th><th>Status</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="3" class="empty">No opportunities in storage.</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Close</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${variants.length?`<button class="btn btn-ghost" style="width:auto" onclick="fxDoMergeVariants()">🔗 Merge duplicate spellings</button>`:''}
+        <button class="btn btn-primary" style="width:auto" onclick="fxRepairAll()">🛠️ Repair &amp; Show All</button>
+      </div>
+    </div>`;
+}
+function fxAssignNoOffice(){
+  const el=document.getElementById('fxNoOffPick'); const off=el?el.value:'';
+  if(!off){ toast('Pick an office first'); return; }
+  const arr=oppList(); let n=0;
+  arr.forEach(o=>{ if(!(o.office||'').trim()){ o.office=off; n++; } });
+  if(n) oppSave(arr);
+  fxHealthRender(); route(); toast('Assigned '+n+' opportunit'+(n===1?'y':'ies')+' to '+off);
+}
+function fxDoMergeVariants(){
+  const n=fxMergeOfficeVariants();
+  fxHealthRender(); route();
+  toast(n?('Merged '+n+' opportunit'+(n===1?'y':'ies')+' onto one office name'):'Nothing to merge');
+}
+function fxRepairAll(){
+  let reg=0, merged=0;
+  try{ reg=fxRegisterMissingOffices(); }catch(e){}
+  try{ merged=fxMergeOfficeVariants(); }catch(e){}
+  /* clear any filter that could still be hiding records */
+  try{ if(typeof OPP_OFF!=='undefined') OPP_OFF='all';
+       if(typeof OPP_BRK!=='undefined') OPP_BRK='all';
+       if(typeof OPP_SEARCH!=='undefined') OPP_SEARCH='';
+       if(typeof OPP_STAGE_FILTER!=='undefined') OPP_STAGE_FILTER='all';
+       if(typeof OPP_TYPE_FILTER!=='undefined') OPP_TYPE_FILTER='all'; }catch(e){}
+  fxHealthRender(); route();
+  toast('Repair complete — '+reg+' office(s) registered, '+merged+' record(s) merged, filters cleared');
+}
+
+/* ===================================================================
+   5) BUTTON — Funnel Health on the Prospect Funnel action bar
+   =================================================================== */
+(function fxAddButton(){
+  const _pf=window.pageFunnel;
+  if(typeof _pf!=='function') return;
+  window.pageFunnel=function(){
+    let html=_pf.apply(this, arguments);
+    try{
+      const hidden=fxUnregisteredOffices().reduce((s,o)=>{
+        return s+(oppList().filter(x=>(x.office||'')===o).length);
+      },0)+fxNoOfficeOpps().length;
+      const btn=`<button class="btn ${hidden?'btn-primary':'btn-ghost'}" style="width:auto${hidden?';background:var(--red)':''}" onclick="fxHealthOpen()" title="Check stored vs visible opportunities">🩺 Funnel Health${hidden?` <span class="age-badge" style="background:rgba(0,0,0,.28)">${hidden} hidden</span>`:''}</button>`;
+      const anchor='<button class="btn btn-ghost" style="width:auto" onclick="oppAddOffice()">';
+      const i=html.indexOf(anchor);
+      if(i>=0) html=html.slice(0,i)+btn+html.slice(i);
+    }catch(e){ console.error(e); }
+    return html;
+  };
+})();
+
+/* expose */
+window.fxOfficesOnOpps=fxOfficesOnOpps; window.fxRegisteredOffices=fxRegisteredOffices;
+window.fxUnregisteredOffices=fxUnregisteredOffices; window.fxNoOfficeOpps=fxNoOfficeOpps;
+window.fxRegisterMissingOffices=fxRegisterMissingOffices; window.fxMergeOfficeVariants=fxMergeOfficeVariants;
+window.fxFindOfficeVariants=fxFindOfficeVariants; window.fxOfficeCounts=fxOfficeCounts;
+window.fxHealthOpen=fxHealthOpen; window.fxHealthRender=fxHealthRender;
+window.fxAssignNoOffice=fxAssignNoOffice; window.fxDoMergeVariants=fxDoMergeVariants; window.fxRepairAll=fxRepairAll;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+<script>
+/* ===================================================================
+   PART 1 — RECOVER PROSPECTS FROM LEGACY BACKUPS
+   -------------------------------------------------------------------
+   Your backup keeps funnel data in more than one place:
+
+     opps[]                     → the current funnel store (restores fine)
+     prospects{ user: [...] }   → the OLD NSE prospect store
+     customers[] fromFunnel:true→ funnel records already converted
+
+   The restore only reads `opps`. Anything still sitting in `prospects`
+   — which is where new records labelled as prospects were written in the
+   older version — is skipped entirely, so those opportunities silently
+   never arrive. This converts them into funnel opportunities on import.
+   =================================================================== */
+
+/* map a legacy progress/stage string onto the funnel's flag model */
+function pxFlags(p){
+  const s=String(p||'').toLowerCase();
+  const f={brokerContacted:false,nseConversation:false,readyToQuote:false,wonCustomer:false};
+  if(s.indexOf('turning')>=0||s.indexOf('won')>=0||s.indexOf('customer')>=0){ f.brokerContacted=f.nseConversation=f.readyToQuote=f.wonCustomer=true; }
+  else if(s.indexOf('quot')>=0||s.indexOf('negotiat')>=0||s.indexOf('ready')>=0){ f.brokerContacted=f.nseConversation=f.readyToQuote=true; }
+  else if(s.indexOf('needs')>=0||s.indexOf('nse')>=0){ f.brokerContacted=f.nseConversation=true; }
+  else if(s.indexOf('qualif')>=0||s.indexOf('call')>=0||s.indexOf('outreach')>=0||s.indexOf('contact')>=0){ f.brokerContacted=true; }
+  return f;
+}
+function pxId(n){ return 'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,7)+(n||0); }
+function pxKey(name){ try{ return (typeof dupKey==='function')?dupKey(name):String(name||'').toLowerCase().replace(/[^a-z0-9]/g,''); }catch(e){ return String(name||'').toLowerCase(); } }
+
+/* normalise one legacy prospect record into a funnel opportunity */
+function pxToOpp(p, ownerU, n){
+  const company=String(p.company||p.customer||p.name||p.account||'').trim();
+  if(!company) return null;
+  const f=pxFlags(p.progress||p.stage||p.status);
+  return {
+    id: p.id||pxId(n),
+    company: company,
+    broker: p.broker||p.rep||'',
+    office: p.office||'',
+    industry: p.industry||'',
+    tier: p.tier||'Tier 3 - Medium',
+    likelihood: (p.likelihood!=null&&p.likelihood!=='')?p.likelihood:'',
+    equipment: p.equipment||p.service||p.modes||'',
+    why: p.why||'', fact: p.fact||'', presence: p.presence||'', question: p.question||'',
+    notes: p.notes||'',
+    notesLog: Array.isArray(p.notesLog)?p.notesLog:(p.notes?[{text:p.notes,at:(p.savedAt||new Date().toISOString())}]:[]),
+    relationship: p.relationship||'Prospect',
+    classification: p.classification||'',
+    brokerContacted: (p.brokerContacted!=null)?!!p.brokerContacted:f.brokerContacted,
+    nseConversation: (p.nseConversation!=null)?!!p.nseConversation:f.nseConversation,
+    readyToQuote:    (p.readyToQuote!=null)?!!p.readyToQuote:f.readyToQuote,
+    wonCustomer:     (p.wonCustomer!=null)?!!p.wonCustomer:f.wonCustomer,
+    intake: p.intake||null,
+    topOpp: !!p.topOpp, whale: !!p.whale,
+    followUpDate: p.followUpDate||'', followUpSetAt: p.followUpSetAt||'',
+    rep: p.rep||'', ownerType: p.rep?'rep':'office',
+    nseOwner: ownerU||'',
+    recoveredFrom: 'prospects'
+  };
+}
+
+/* pull every legacy prospect bucket out of a parsed backup object */
+function pxHarvest(data){
+  const out=[]; let n=0;
+  if(!data||typeof data!=='object') return out;
+  const buckets=[];
+  /* prospects keyed by user: { tyler:[...], coltonbushw5:[...] } */
+  ['prospects','nseprospects','nseProspects','repprospects','repProspects'].forEach(k=>{
+    const store=data[k];
+    if(store && typeof store==='object' && !Array.isArray(store)){
+      Object.keys(store).forEach(u=>{ if(Array.isArray(store[u])) buckets.push([u,store[u]]); });
+    } else if(Array.isArray(store)) buckets.push(['',store]);
+  });
+  buckets.forEach(([u,arr])=>arr.forEach(p=>{ const o=pxToOpp(p,u,n++); if(o) out.push(o); }));
+  return out;
+}
+
+/* merge harvested records into the funnel, skipping true duplicates */
+function pxMerge(recs){
+  if(!recs||!recs.length) return {added:0,skipped:0};
+  const arr=oppList()||[];
+  const seen=new Set(arr.map(o=>pxKey(o.company)+'|'+(o.rep||'')));
+  const ids=new Set(arr.map(o=>o.id));
+  let added=0, skipped=0;
+  recs.forEach(r=>{
+    const k=pxKey(r.company)+'|'+(r.rep||'');
+    if(seen.has(k)||ids.has(r.id)){ skipped++; return; }
+    seen.add(k); ids.add(r.id); arr.push(r); added++;
+  });
+  if(added){
+    oppSave(arr);
+    try{ if(typeof fxRegisterMissingOffices==='function') fxRegisterMissingOffices(); }catch(e){}
+  }
+  return {added,skipped};
+}
+
+/* ---- hook the file picker so every restore harvests prospects ---- */
+(function pxWrapRestore(){
+  function scanText(txt){
+    let data=null; try{ data=JSON.parse(txt); }catch(e){ return; }
+    const recs=pxHarvest(data);
+    if(!recs.length) return;
+    setTimeout(()=>{
+      const res=pxMerge(recs);
+      if(res.added){ route(); toast('Recovered '+res.added+' prospect'+(res.added===1?'':'s')+' the restore had skipped'); }
+    }, 1200);   /* let the native restore finish writing first */
+  }
+  ['importFile','restoreFile','backupFile','jsonFile'].forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.addEventListener('change', function(e){
+      const f=e.target.files&&e.target.files[0]; if(!f) return;
+      const fr=new FileReader(); fr.onload=()=>scanText(String(fr.result||'')); fr.readAsText(f);
+    });
+  });
+  window.pxScanText=scanText;
+})();
+
+/* ---- manual recovery: pick a backup and pull only its prospects ---- */
+function pxRecoverOpen(){
+  const box=document.getElementById('modalBox');
+  box.parentElement.querySelector('.modal').classList.add('wide');
+  box.innerHTML=`<h3>🛟 Recover Prospects From Backup</h3>
+    <div class="card-sub" style="margin-bottom:12px">Older backups store new prospect records in a separate <code>prospects</code> area that the normal restore does not read, so they never arrive. Select that backup file and this pulls the prospects across into the funnel. Existing records are left untouched and duplicates are skipped.</div>
+    <div class="form-row"><div class="field-c" style="grid-column:1/-1">
+      <label>Backup JSON</label>
+      <input type="file" accept="application/json,.json" id="pxFile" onchange="pxPreview(this)">
+      <div class="detected" id="pxMsg">No file selected.</div>
+    </div></div>
+    <div id="pxList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="pxGo" style="width:auto;opacity:.5;pointer-events:none" onclick="pxCommit()">Recover</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+let PX_PENDING=[];
+function pxPreview(input){
+  const f=input.files&&input.files[0];
+  const msg=document.getElementById('pxMsg'), list=document.getElementById('pxList'), go=document.getElementById('pxGo');
+  PX_PENDING=[];
+  if(!f){ msg.textContent='No file selected.'; return; }
+  const fr=new FileReader();
+  fr.onload=()=>{
+    let data=null;
+    try{ data=JSON.parse(String(fr.result||'')); }
+    catch(e){ msg.innerHTML='<span style="color:var(--red)">That file is not valid JSON.</span>'; return; }
+    const recs=pxHarvest(data);
+    const arr=oppList()||[];
+    const seen=new Set(arr.map(o=>pxKey(o.company)+'|'+(o.rep||'')));
+    const fresh=recs.filter(r=>!seen.has(pxKey(r.company)+'|'+(r.rep||'')));
+    PX_PENDING=fresh;
+    msg.innerHTML=`Found <strong>${recs.length}</strong> prospect record(s) · <strong style="color:var(--green)">${fresh.length} new</strong> · ${recs.length-fresh.length} already in the funnel.`;
+    list.innerHTML = fresh.length
+      ? `<div style="max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:9px;padding:8px">
+          ${fresh.map(r=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px">
+            <strong>${esc(r.company)}</strong>
+            <span style="color:var(--muted)">${esc(r.broker||'—')}${r.office?(' · '+esc(r.office)):' · (no office)'}</span></div>`).join('')}
+         </div>`
+      : `<div class="empty" style="padding:18px">Nothing new to recover from this file.</div>`;
+    if(go){ go.style.opacity=fresh.length?'1':'.5'; go.style.pointerEvents=fresh.length?'auto':'none'; go.textContent='Recover '+fresh.length; }
+  };
+  fr.readAsText(f);
+}
+function pxCommit(){
+  const res=pxMerge(PX_PENDING);
+  PX_PENDING=[]; closeModal(); route();
+  toast('Recovered '+res.added+' prospect'+(res.added===1?'':'s')+(res.skipped?(' · '+res.skipped+' duplicate(s) skipped'):''));
+}
+
+/* ===================================================================
+   PART 2 — REP PROSPECTING: OFFICE DROPDOWN SCOPED TO THE REP
+   -------------------------------------------------------------------
+   In the Rep funnel the Office picker was still listing every office in
+   the company. A rep now only ever sees the offices they are assigned
+   to in Manage Reps (an ART with none inherits their mentor AR's).
+   =================================================================== */
+function pxRepOfficesFor(u){
+  if(!u||u==='all') return null;
+  let offs=[];
+  try{
+    offs=(typeof repOffices==='function')?(repOffices(u)||[]):[];
+    if(!offs.length && typeof isART==='function' && isART(u)){
+      const m=(typeof repMentor==='function')?repMentor(u):null;
+      if(m) offs=(typeof repOffices==='function')?(repOffices(m)||[]):[];
+    }
+  }catch(e){}
+  return offs;
+}
+/* which rep is driving the current view? */
+function pxScopedRep(){
+  try{
+    if(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep' && ACTIVE_REP && ACTIVE_REP!=='all') return ACTIVE_REP;
+    const onRepPage=(typeof CURRENT_PAGE!=='undefined' && CURRENT_PAGE==='repprospects')
+                 || (typeof FUNNEL_SCOPE!=='undefined' && FUNNEL_SCOPE==='rep');
+    if(onRepPage && typeof RPF_REP!=='undefined' && RPF_REP && RPF_REP!=='all') return RPF_REP;
+  }catch(e){}
+  return '';
+}
+/* narrow the funnel's office list whenever a rep is in scope */
+(function pxScopeOfficeList(){
+  const _list=window.oppOfficeList;
+  if(typeof _list!=='function') return;
+  window.oppOfficeList=function(){
+    let l=_list.apply(this, arguments)||[];
+    const u=pxScopedRep();
+    if(!u) return l;
+    const mine=pxRepOfficesFor(u);
+    if(!mine) return l;
+    const set=new Set(mine.map(o=>String(o||'').trim().toLowerCase()));
+    /* always keep offices the rep actually has opportunities in, so
+       nothing they own becomes unreachable */
+    try{ (oppList()||[]).forEach(o=>{ if(o.rep===u && (o.office||'').trim()) set.add(o.office.trim().toLowerCase()); }); }catch(e){}
+    const out=l.filter(o=>set.has(String(o||'').trim().toLowerCase()));
+    return out;
+  };
+})();
+/* keep the active office filter valid when it falls outside the rep's set */
+(function pxGuardOfficeFilter(){
+  const _pf=window.pageFunnel;
+  if(typeof _pf!=='function') return;
+  window.pageFunnel=function(){
+    try{
+      const u=pxScopedRep();
+      if(u && typeof OPP_OFF!=='undefined' && OPP_OFF!=='all'){
+        const ok=(oppOfficeList()||[]).some(o=>o===OPP_OFF);
+        if(!ok){ OPP_OFF='all'; if(typeof OPP_BRK!=='undefined') OPP_BRK='all'; }
+      }
+    }catch(e){}
+    return _pf.apply(this, arguments);
+  };
+})();
+/* the Add/Edit Opportunity office picker follows the same rule */
+(function pxScopeFormOffice(){
+  const _open=window.openOppForm;
+  if(typeof _open!=='function') return;
+  window.openOppForm=function(){
+    const r=_open.apply(this, arguments);
+    try{
+      const u=pxScopedRep(); if(!u) return r;
+      const mine=pxRepOfficesFor(u); if(!mine) return r;
+      const box=document.getElementById('modalBox'); if(!box) return r;
+      box.querySelectorAll('select').forEach(sel=>{
+        const lbl=(sel.closest('.field-c')||sel.parentElement);
+        const txt=lbl?String(lbl.textContent||'').toLowerCase():'';
+        if(txt.indexOf('office')<0) return;
+        const cur=sel.value;
+        const keep=mine.slice();
+        if(cur && keep.indexOf(cur)<0) keep.unshift(cur);
+        sel.innerHTML=`<option value="">— No office —</option>`+
+          keep.map(o=>`<option value="${esc(o)}" ${cur===o?'selected':''}>${esc(o)}</option>`).join('');
+      });
+    }catch(e){ console.error('form office scope',e); }
+    return r;
+  };
+})();
+/* Office Summary Report office picker follows it too */
+(function pxScopeOsr(){
+  const _r=window.renderOfficeSummary;
+  if(typeof _r!=='function') return;
+  window.renderOfficeSummary=function(){
+    try{
+      const u=pxScopedRep();
+      if(u && typeof OSR!=='undefined' && OSR && OSR.office && OSR.office!=='all'){
+        const ok=(oppOfficeList()||[]).some(o=>o===OSR.office);
+        if(!ok){ OSR.office='all'; OSR.broker='all'; }
+      }
+    }catch(e){}
+    return _r.apply(this, arguments);
+  };
+})();
+
+/* ---- Recover button on the Import Center / funnel action bar ---- */
+(function pxAddButton(){
+  const _pf=window.pageFunnel;
+  if(typeof _pf!=='function') return;
+  window.pageFunnel=function(){
+    let html=_pf.apply(this, arguments);
+    try{
+      const btn=`<button class="btn btn-ghost" style="width:auto" onclick="pxRecoverOpen()" title="Pull prospects out of an older backup">🛟 Recover Prospects</button>`;
+      const anchor='<button class="btn btn-ghost" style="width:auto" onclick="oppAddOffice()">';
+      const i=html.indexOf(anchor);
+      if(i>=0) html=html.slice(0,i)+btn+html.slice(i);
+    }catch(e){}
+    return html;
+  };
+})();
+
+/* expose */
+window.pxHarvest=pxHarvest; window.pxMerge=pxMerge; window.pxToOpp=pxToOpp;
+window.pxRecoverOpen=pxRecoverOpen; window.pxPreview=pxPreview; window.pxCommit=pxCommit;
+window.pxRepOfficesFor=pxRepOfficesFor; window.pxScopedRep=pxScopedRep;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
 
 </body>
 </html>
