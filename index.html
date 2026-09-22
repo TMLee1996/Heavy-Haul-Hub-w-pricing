@@ -13302,5 +13302,404 @@ window.mtdParseLen=mtdParseLen; window.mtdParseWt=mtdParseWt; window.mtdFt=mtdFt
 try{ if(typeof route==='function' && CURRENT_PAGE==='projectcenter') route(); }catch(e){}
 </script>
 
+<script>
+/* ===================================================================
+   FOLLOW-UP DATE PICKER + TEAM CALENDAR  (NSE Tools + AR Tools)
+   -------------------------------------------------------------------
+   1) "Follow up in X days" is now a real DATE PICKER on every
+      opportunity — NSE Prospect Funnel and Rep Prospect Funnel alike.
+      Quick presets (+3 / +7 / +14 / +30) stay for speed.
+   2) A shared CALENDAR page appears under BOTH NSE Tools and AR Tools.
+      It fills in automatically from every follow-up date you set, and
+      you can drop your own events on any day (site visits, calls,
+      deadlines). Month grid + upcoming agenda, scoped to who's working.
+   =================================================================== */
+
+/* ---------- date utilities ---------- */
+function calToISO(d){ const p=n=>(n<10?'0':'')+n; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function calFromISO(s){ if(!s) return null; const p=String(s).split('-'); if(p.length!==3) return null;
+  const d=new Date(+p[0], +p[1]-1, +p[2]); return isNaN(d)?null:d; }
+function calPlusDays(n){ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+(parseInt(n)||0)); return calToISO(d); }
+function calDaysFromToday(iso){ const d=calFromISO(iso); if(!d) return null;
+  const t=new Date(); t.setHours(0,0,0,0); return Math.round((d-t)/86400000); }
+function calLabel(iso){ try{ return fmtDate(iso); }catch(e){ return iso||'—'; } }
+
+/* ===================================================================
+   1) FOLLOW-UP  —  pick a date instead of counting days
+   =================================================================== */
+function oppSetFollowUpDate(id, date){
+  const arr=oppList(); const o=arr.find(x=>x.id===id); if(!o) return;
+  if(!date){ o.followUpDate=''; o.followUpDays=''; oppSave(arr);
+    if(typeof OPP_DETAIL!=='undefined' && OPP_DETAIL===id) openOppDetail(id);
+    route(); toast('Follow-up cleared'); return; }
+  o.followUpDate=date;
+  const d=calDaysFromToday(date);
+  o.followUpDays=(d==null?'':d);
+  o.followUpSetAt=new Date().toISOString();
+  oppSave(arr);
+  if(typeof OPP_DETAIL!=='undefined' && OPP_DETAIL===id) openOppDetail(id);
+  route();
+  toast('Follow-up set for '+calLabel(date)+(d!=null?(d===0?' (today)':(d>0?(' — in '+d+' day'+(d===1?'':'s')):(' — '+Math.abs(d)+' day(s) ago'))):''));
+}
+function oppFollowQuick(id, days){ oppSetFollowUpDate(id, calPlusDays(days)); }
+
+/* swap the days-input row inside the opportunity detail modal */
+(function calWrapExtras(){
+  const _ex = window.oppExtrasHTML;
+  if(typeof _ex!=='function') return;
+  window.oppExtrasHTML = function(o){
+    let html = _ex.apply(this, arguments);
+    try{
+      const re = /<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">\s*<span style="font-size:13px;color:var\(--muted\)">Follow up in[\s\S]*?<\/div>/;
+      const picker = `<div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+          <div>
+            <label style="margin-bottom:5px">Follow-up date</label>
+            <input type="date" id="oppFuDate" style="max-width:190px" value="${esc(o.followUpDate||'')}" onchange="oppSetFollowUpDate('${o.id}',this.value)">
+          </div>
+          <div class="filterbar" style="margin:0 0 4px">
+            <button class="chip" onclick="oppFollowQuick('${o.id}',0)">Today</button>
+            <button class="chip" onclick="oppFollowQuick('${o.id}',3)">+3d</button>
+            <button class="chip" onclick="oppFollowQuick('${o.id}',7)">+1w</button>
+            <button class="chip" onclick="oppFollowQuick('${o.id}',14)">+2w</button>
+            <button class="chip" onclick="oppFollowQuick('${o.id}',30)">+30d</button>
+          </div>
+          ${o.followUpDate?`<button class="rowbtn" style="margin-bottom:8px" onclick="oppSetFollowUpDate('${o.id}','')">Clear</button>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">Pick the exact day you want to circle back — it drops straight onto the <strong style="color:var(--accent2);cursor:pointer" onclick="closeModal();go('calendar')">📅 Calendar</strong>.</div>`;
+      if(re.test(html)) html = html.replace(re, picker);
+    }catch(e){ console.error('follow-up picker', e); }
+    return html;
+  };
+})();
+
+/* ===================================================================
+   2) CALENDAR STORE
+   =================================================================== */
+const CAL_KEY='hht_calendar';
+DB.calEvents = function(){ try{ return JSON.parse(localStorage.getItem(CAL_KEY)||'[]')||[]; }catch(e){ return []; } };
+DB.saveCalEvents = function(a){ try{ localStorage.setItem(CAL_KEY, JSON.stringify(a||[])); }catch(e){} };
+
+/* keep events inside backups */
+(function calWrapSnapshot(){
+  const _snap=window.snapshot;
+  if(typeof _snap!=='function') return;
+  window.snapshot=function(){ const s=_snap.apply(this,arguments)||{}; try{ s.calendar=DB.calEvents(); }catch(e){} return s; };
+  try{
+    const el=document.getElementById('importFile');
+    if(el) el.addEventListener('change', function(e){
+      const f=e.target.files&&e.target.files[0]; if(!f) return;
+      const fr=new FileReader();
+      fr.onload=()=>{ try{ const d=JSON.parse(String(fr.result||'')); if(Array.isArray(d.calendar)){ DB.saveCalEvents(d.calendar); setTimeout(()=>{ try{ route(); }catch(x){} },1100); } }catch(x){} };
+      fr.readAsText(f);
+    });
+  }catch(e){}
+})();
+
+const CAL_COLORS=[
+  {k:'blue',   label:'General',   c:'#134074'},
+  {k:'orange', label:'Customer',  c:'#e07a00'},
+  {k:'green',  label:'Win / Close',c:'#1b873f'},
+  {k:'red',    label:'Deadline',  c:'#c0392b'},
+  {k:'purple', label:'Travel',    c:'#6d28d9'}
+];
+function calColor(k){ const f=CAL_COLORS.find(x=>x.k===k); return f?f.c:'#134074'; }
+
+/* ---------- who is working / what they should see ---------- */
+function calActiveRep(){ try{ if(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='rep' && ACTIVE_REP && ACTIVE_REP!=='all') return ACTIVE_REP; }catch(e){} return ''; }
+function calActiveNse(){ try{ if(typeof ACTIVE_ROLE!=='undefined' && ACTIVE_ROLE==='nse' && ACTIVE_NSE) return ACTIVE_NSE; }catch(e){} return ''; }
+function calOwnerTag(){ const r=calActiveRep(); if(r) return 'rep:'+r; const n=calActiveNse(); if(n) return 'nse:'+n; return 'all'; }
+function calOwnerLabel(){ const r=calActiveRep(); if(r) return repName(r); const n=calActiveNse(); if(n) return nseName(n); return 'Manager (all access)'; }
+
+/* every opportunity this identity should see follow-ups for */
+function calScopedOpps(){
+  let list=oppList()||[];
+  const rep=calActiveRep();
+  if(rep) return list.filter(o=>o.rep===rep);
+  const nse=calActiveNse();
+  if(nse){
+    let offs=null;
+    try{ if(typeof nseOffices==='function') offs=new Set(nseOffices(nse)); }catch(e){}
+    if(offs && offs.size) list=list.filter(o=>offs.has(o.office||''));
+    return list;
+  }
+  return list;
+}
+function calScopedEvents(){
+  const all=DB.calEvents()||[];
+  const rep=calActiveRep();
+  if(rep) return all.filter(e=>!e.owner || e.owner==='all' || e.owner==='rep:'+rep);
+  const nse=calActiveNse();
+  if(nse) return all.filter(e=>!e.owner || e.owner==='all' || e.owner==='nse:'+nse);
+  return all;
+}
+
+/* ---------- build the day map ---------- */
+let CAL_SHOW_FU=true, CAL_SHOW_EV=true, CAL_SOURCE='all';   /* all | office | rep */
+function calDayMap(){
+  const map={};
+  const push=(iso,item)=>{ if(!iso) return; (map[iso]=map[iso]||[]).push(item); };
+  if(CAL_SHOW_FU){
+    calScopedOpps().forEach(o=>{
+      if(!o.followUpDate) return;
+      if(CAL_SOURCE==='rep' && !o.rep) return;
+      if(CAL_SOURCE==='office' && o.rep) return;
+      const stage=(typeof FUNNEL_MAP!=='undefined' && typeof oppStage==='function')?(FUNNEL_MAP[oppStage(o)]||{}):{};
+      push(o.followUpDate, { kind:'fu', id:o.id, title:o.company, sub:(o.rep?('👤 '+repName(o.rep)):(o.office||'Office funnel')),
+        color:(stage.color||'#c0392b'), stage:(stage.label||'') });
+    });
+  }
+  if(CAL_SHOW_EV){
+    calScopedEvents().forEach(e=>push(e.date, { kind:'ev', id:e.id, title:e.title||'(untitled)', sub:(e.time||''), color:calColor(e.color), notes:e.notes||'' }));
+  }
+  Object.keys(map).forEach(k=>map[k].sort((a,b)=>String(a.sub||'').localeCompare(String(b.sub||''))));
+  return map;
+}
+
+/* ===================================================================
+   3) CALENDAR PAGE
+   =================================================================== */
+let CAL_Y=null, CAL_M=null;
+function calInit(){ if(CAL_Y==null){ const d=new Date(); CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); } }
+function calShift(n){ calInit(); CAL_M+=n; while(CAL_M<0){ CAL_M+=12; CAL_Y--; } while(CAL_M>11){ CAL_M-=12; CAL_Y++; } route(); }
+function calToday(){ const d=new Date(); CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); route(); }
+function calSetSource(v){ CAL_SOURCE=v; route(); }
+function calToggle(which){ if(which==='fu') CAL_SHOW_FU=!CAL_SHOW_FU; else CAL_SHOW_EV=!CAL_SHOW_EV; route(); }
+
+function calMonthName(y,m){ return new Date(y,m,1).toLocaleDateString('en-US',{month:'long',year:'numeric'}); }
+
+function pageCalendar(){
+  calInit();
+  const map=calDayMap();
+  const today=calToISO(new Date());
+  const first=new Date(CAL_Y, CAL_M, 1);
+  const start=new Date(first); start.setDate(1-first.getDay());
+  const cells=[];
+  for(let i=0;i<42;i++){ const d=new Date(start); d.setDate(start.getDate()+i); cells.push(d); }
+  const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+    .map(d=>`<div style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 0">${d}</div>`).join('');
+
+  const grid=cells.map(d=>{
+    const iso=calToISO(d);
+    const inMonth=(d.getMonth()===CAL_M);
+    const isToday=(iso===today);
+    const items=map[iso]||[];
+    const chips=items.slice(0,4).map(it=>{
+      const click = it.kind==='fu' ? `openOppDetail('${it.id}')` : `calEditEvent('${it.id}')`;
+      const icon  = it.kind==='fu' ? '🔔' : '📌';
+      return `<div onclick="event.stopPropagation();${click}" title="${esc(it.title)}${it.sub?(' — '+esc(it.sub)):''}"
+        style="display:block;font-size:11px;line-height:1.25;padding:2px 5px;margin-bottom:2px;border-radius:4px;cursor:pointer;
+        background:${it.color};color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${icon} ${esc(it.title)}</div>`;
+    }).join('');
+    const more = items.length>4 ? `<div style="font-size:10.5px;color:var(--muted);font-weight:700">+${items.length-4} more</div>` : '';
+    return `<div onclick="calAddEvent('${iso}')" title="Click to add an event on ${calLabel(iso)}"
+      style="min-height:104px;border:1px solid var(--line);border-radius:8px;padding:5px 6px;cursor:pointer;
+      background:${inMonth?'var(--card)':'var(--bg)'};${isToday?'box-shadow:0 0 0 2px var(--accent)':''};opacity:${inMonth?1:.55}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:12px;font-weight:${isToday?'800':'600'};color:${isToday?'var(--accent)':'var(--ink)'}">${d.getDate()}</span>
+        ${items.length?`<span style="font-size:10px;color:var(--muted);font-weight:700">${items.length}</span>`:''}
+      </div>
+      ${chips}${more}
+    </div>`;
+  }).join('');
+
+  /* upcoming agenda — next 30 days */
+  const upcoming=[];
+  Object.keys(map).sort().forEach(iso=>{
+    const n=calDaysFromToday(iso);
+    if(n==null || n<0 || n>30) return;
+    map[iso].forEach(it=>upcoming.push({iso,n,it}));
+  });
+  const overdue=[];
+  Object.keys(map).sort().forEach(iso=>{
+    const n=calDaysFromToday(iso);
+    if(n==null || n>=0) return;
+    map[iso].forEach(it=>{ if(it.kind==='fu') overdue.push({iso,n,it}); });
+  });
+
+  const agendaRow=(x)=>{
+    const click = x.it.kind==='fu' ? `openOppDetail('${x.it.id}')` : `calEditEvent('${x.it.id}')`;
+    const when = x.n===0?'Today':x.n===1?'Tomorrow':(x.n>0?('in '+x.n+' days'):(Math.abs(x.n)+'d overdue'));
+    return `<div onclick="${click}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--line);border-left:4px solid ${x.it.color};border-radius:9px;margin-bottom:7px;cursor:pointer;background:var(--card)">
+      <span><strong style="color:var(--ink)">${x.it.kind==='fu'?'🔔':'📌'} ${esc(x.it.title)}</strong>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(x.it.sub||'')}${x.it.stage?(' · '+esc(x.it.stage)):''}</div></span>
+      <span style="text-align:right;white-space:nowrap">
+        <div style="font-size:12.5px;font-weight:700;color:var(--ink)">${calLabel(x.iso)}</div>
+        <div style="font-size:11px;color:${x.n<0?'var(--red)':'var(--muted)'};font-weight:700">${when}</div>
+      </span>
+    </div>`;
+  };
+
+  const overdueCard = overdue.length ? `<div class="alert-box danger">
+      <h4>🔔 Follow-Ups Overdue <span class="age-badge">${overdue.length}</span></h4>
+      <div class="a-sub">These follow-up dates have already passed. Click one to open the opportunity and log the next step.</div>
+      ${overdue.slice(0,12).map(agendaRow).join('')}
+    </div>` : '';
+
+  const evCount=calScopedEvents().length;
+  const fuCount=calScopedOpps().filter(o=>o.followUpDate).length;
+
+  const srcChip=(v,l)=>`<button class="chip ${CAL_SOURCE===v?'active':''}" onclick="calSetSource('${v}')">${l}</button>`;
+
+  return `
+  <div class="page-title">📅 Calendar</div>
+  <div class="page-sub">Everything on one page. Every <strong>follow-up date</strong> you set on an opportunity lands here automatically, and you can drop your own events on any day — click a date to add one. Showing: <strong>${esc(calOwnerLabel())}</strong>.</div>
+
+  ${overdueCard}
+
+  <div class="kpi-grid">
+    ${kpi('Follow-Ups Scheduled',fuCount,'b-red','from the funnel')}
+    ${kpi('My Events',evCount,'b-blue','added by hand')}
+    ${kpi('Next 30 Days',upcoming.length,'b-amber','on the agenda')}
+    ${kpi('Overdue',overdue.length,'b-orange','need attention')}
+  </div>
+
+  <div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="rowbtn" onclick="calShift(-1)">←</button>
+      <strong style="font-size:17px;color:var(--ink);min-width:190px;text-align:center;display:inline-block">${calMonthName(CAL_Y,CAL_M)}</strong>
+      <button class="rowbtn" onclick="calShift(1)">→</button>
+      <button class="rowbtn" onclick="calToday()">Today</button>
+    </div>
+    <div style="flex:1"></div>
+    <div class="filterbar" style="margin:0">
+      ${srcChip('all','All')}${srcChip('office','Office / NSE funnel')}${srcChip('rep','Rep funnel')}
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-weight:700;margin:0;cursor:pointer"><input type="checkbox" style="width:auto" ${CAL_SHOW_FU?'checked':''} onchange="calToggle('fu')"> 🔔 Follow-ups</label>
+    <label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-weight:700;margin:0;cursor:pointer"><input type="checkbox" style="width:auto" ${CAL_SHOW_EV?'checked':''} onchange="calToggle('ev')"> 📌 Events</label>
+    <button class="btn btn-primary" style="width:auto" onclick="calAddEvent('${today}')">＋ Add Event</button>
+  </div>
+
+  <div class="card">
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${dow}</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">${grid}</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--muted)">
+      <span>🔔 Follow-up — colored by funnel stage</span>
+      ${CAL_COLORS.map(c=>`<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:${c.c};display:inline-block"></span>${c.label}</span>`).join('')}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>🗓️ Upcoming — Next 30 Days <span style="color:var(--muted);font-weight:500;font-size:13px">(${upcoming.length})</span></h3></div>
+    ${upcoming.length? upcoming.map(agendaRow).join('') : '<div class="empty">Nothing scheduled in the next 30 days. Set a follow-up date on an opportunity, or click any day above to add an event.</div>'}
+  </div>`;
+}
+
+/* ===================================================================
+   4) EVENT ADD / EDIT
+   =================================================================== */
+let CAL_EDIT=null;
+function calAddEvent(iso){ CAL_EDIT=null; calEventModal({date:iso||calToISO(new Date()), title:'', time:'', notes:'', color:'blue', owner:calOwnerTag()}); }
+function calEditEvent(id){
+  const e=(DB.calEvents()||[]).find(x=>x.id===id);
+  if(!e){ toast('Event not found'); return; }
+  CAL_EDIT=id; calEventModal(e);
+}
+function calEventModal(e){
+  const box=document.getElementById('modalBox');
+  const modal=box.parentElement.querySelector('.modal');
+  modal.classList.remove('xwide'); modal.classList.remove('wide');
+  const owner=e.owner||calOwnerTag();
+  const ownerOpts=`<option value="${esc(calOwnerTag())}" ${owner===calOwnerTag()?'selected':''}>${esc(calOwnerLabel())} only</option>
+    <option value="all" ${owner==='all'?'selected':''}>Everyone (shared)</option>`;
+  box.innerHTML=`<h3>${CAL_EDIT?'Edit':'Add'} Calendar Event</h3>
+    <div class="card-sub" style="margin-bottom:14px">Drop a site visit, call, quote deadline or anything else onto the calendar. It sits alongside your follow-ups.</div>
+    <div class="form-row"><div class="field-c" style="grid-column:1/-1"><label>Title</label>
+      <input id="cev_title" value="${esc(e.title||'')}" placeholder="e.g. Site visit — Lindsay Precast" onkeydown="if(event.key==='Enter')calSaveEvent()"></div></div>
+    <div class="form-row">
+      <div class="field-c"><label>Date</label><input id="cev_date" type="date" value="${esc(e.date||'')}"></div>
+      <div class="field-c"><label>Time (optional)</label><input id="cev_time" value="${esc(e.time||'')}" placeholder="e.g. 9:30 AM"></div>
+    </div>
+    <div class="form-row">
+      <div class="field-c"><label>Category</label><select id="cev_color">${CAL_COLORS.map(c=>`<option value="${c.k}" ${e.color===c.k?'selected':''}>${c.label}</option>`).join('')}</select></div>
+      <div class="field-c"><label>Visible to</label><select id="cev_owner">${ownerOpts}</select></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="cev_notes" style="min-height:70px" placeholder="Details, address, who's attending…">${esc(e.notes||'')}</textarea></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <div>${CAL_EDIT?`<button class="btn btn-ghost del" style="width:auto;background:#fdeaea;color:var(--red)" onclick="calDeleteEvent('${CAL_EDIT}')">🗑️ Delete</button>`:''}</div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost" style="width:auto" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" style="width:auto" onclick="calSaveEvent()">${CAL_EDIT?'Save Changes':'Add Event'}</button>
+      </div>
+    </div>`;
+  document.getElementById('modalBg').classList.add('show');
+  setTimeout(()=>{ const el=document.getElementById('cev_title'); if(el) el.focus(); },40);
+}
+function calSaveEvent(){
+  const title=val('cev_title'), date=val('cev_date');
+  if(!title){ toast('Give the event a title'); return; }
+  if(!date){ toast('Pick a date'); return; }
+  const rec={ title, date, time:val('cev_time'), notes:val('cev_notes'),
+    color:val('cev_color')||'blue', owner:val('cev_owner')||calOwnerTag() };
+  const all=DB.calEvents()||[];
+  if(CAL_EDIT){ const e=all.find(x=>x.id===CAL_EDIT); if(e) Object.assign(e, rec); }
+  else { rec.id='cal'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); rec.createdAt=new Date().toISOString(); all.push(rec); }
+  DB.saveCalEvents(all);
+  const d=calFromISO(date); if(d){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); }
+  CAL_EDIT=null; closeModal(); route();
+  toast(rec.id?('Event added for '+calLabel(date)):'Event updated');
+}
+function calDeleteEvent(id){
+  if(!confirm('Delete this calendar event?')) return;
+  DB.saveCalEvents((DB.calEvents()||[]).filter(e=>e.id!==id));
+  CAL_EDIT=null; closeModal(); route(); toast('Event deleted');
+}
+
+/* ===================================================================
+   5) NAV + ROUTER WIRING  (NSE Tools + AR Tools)
+   =================================================================== */
+(function calWireNav(){
+  try{
+    ['nse','ar'].forEach(gid=>{
+      const g=NAV_GROUPS.find(x=>x.id===gid);
+      if(g && !g.items.some(it=>it.id==='calendar')) g.items.push({id:'calendar', ic:'📅', label:'Calendar'});
+    });
+    if(typeof REP_PAGES!=='undefined' && REP_PAGES.indexOf('calendar')<0) REP_PAGES.push('calendar');
+  }catch(e){ console.error('calendar nav', e); }
+
+  const _route=window.route;
+  window.route=function(){
+    if(CURRENT_PAGE==='calendar'){
+      if(typeof roleAllowsPage==='function' && !roleAllowsPage('calendar')){ CURRENT_PAGE='home'; return _route(); }
+      const main=document.getElementById('main');
+      main.innerHTML=pageCalendar();
+      return;
+    }
+    return _route.apply(this, arguments);
+  };
+
+  try{ if(typeof buildSidebar==='function') buildSidebar(); }catch(e){}
+})();
+
+/* quick link on both funnels */
+(function calFunnelButtons(){
+  function addBtn(fnName){
+    const _f=window[fnName];
+    if(typeof _f!=='function') return;
+    window[fnName]=function(){
+      let html=_f.apply(this, arguments);
+      try{
+        const due=(calScopedOpps()||[]).filter(o=>{ const n=calDaysFromToday(o.followUpDate); return n!=null && n<=0; }).length;
+        const btn=`<button class="btn btn-ghost" style="width:auto" onclick="go('calendar')" title="See every follow-up and event on a calendar">📅 Calendar${due?` <span class="age-badge">${due}</span>`:''}</button>`;
+        const anchor='<button class="btn btn-primary" style="width:auto" onclick="openOppForm()">';
+        const i=html.indexOf(anchor);
+        if(i>=0) html=html.slice(0,i)+btn+html.slice(i);
+      }catch(e){}
+      return html;
+    };
+  }
+  addBtn('pageFunnel'); addBtn('pageRepFunnel');
+})();
+
+/* expose */
+window.pageCalendar=pageCalendar; window.calShift=calShift; window.calToday=calToday;
+window.calSetSource=calSetSource; window.calToggle=calToggle;
+window.calAddEvent=calAddEvent; window.calEditEvent=calEditEvent; window.calSaveEvent=calSaveEvent; window.calDeleteEvent=calDeleteEvent;
+window.oppSetFollowUpDate=oppSetFollowUpDate; window.oppFollowQuick=oppFollowQuick;
+window.calDayMap=calDayMap; window.calScopedOpps=calScopedOpps; window.calScopedEvents=calScopedEvents;
+window.calToISO=calToISO; window.calFromISO=calFromISO; window.calPlusDays=calPlusDays; window.calDaysFromToday=calDaysFromToday;
+
+try{ if(typeof route==='function') route(); }catch(e){}
+</script>
+
 </body>
 </html>
