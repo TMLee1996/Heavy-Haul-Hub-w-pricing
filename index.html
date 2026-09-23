@@ -8280,7 +8280,23 @@ function renderOfficeSummary(){
   const box=document.getElementById('modalBox');
   const modal=box.parentElement.querySelector('.modal'); modal.classList.add('wide'); modal.classList.add('xwide');
   const offOpts=['all'].concat(oppOfficeList()).map(o=>`<option value="${o==='all'?'all':esc(o)}" ${OSR.office===o?'selected':''}>${o==='all'?'All Offices':esc(o)}</option>`).join('');
-  const brOpts=['all'].concat(oppBrokerList()).map(b=>`<option value="${b==='all'?'all':esc(b)}" ${OSR.broker===b?'selected':''}>${b==='all'?'All brokers':esc(b)}</option>`).join('');
+  /* Brokers are scoped to the selected office — only brokers that actually
+     have opportunities in that office are offered. */
+  const osrBrokers=(function(){
+    if(!OSR.office || OSR.office==='all') return oppBrokerList();
+    const allowed=new Set((typeof oppBrokerList==='function')?oppBrokerList():[]);
+    const s=new Set();
+    (oppList()||[]).forEach(o=>{
+      if((o.office||'')!==OSR.office) return;
+      const b=(o.broker||'').trim();
+      if(b && allowed.has(b)) s.add(b);
+    });
+    return [...s].sort((a,b)=>a.localeCompare(b));
+  })();
+  /* If the current broker filter isn't valid for this office, fall back to All. */
+  if(OSR.broker && OSR.broker!=='all' && osrBrokers.indexOf(OSR.broker)<0) OSR.broker='all';
+  const brLbl = (OSR.office && OSR.office!=='all') ? ('All brokers in '+OSR.office) : 'All brokers';
+  const brOpts=['all'].concat(osrBrokers).map(b=>`<option value="${b==='all'?'all':esc(b)}" ${OSR.broker===b?'selected':''}>${b==='all'?brLbl:esc(b)}</option>`).join('');
   const sel=(field,opts)=>`<select onchange="osrSet('${field}',this.value)" style="width:100%">${opts}</select>`;
   const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
   const fld=(lbl,inner)=>`<div style="flex:1;min-width:150px"><label>${lbl}</label>${inner}</div>`;
@@ -8296,7 +8312,7 @@ function renderOfficeSummary(){
       ${fld('Deal Type', sel('dealType', opt('all','All deal types',OSR.dealType)+OPP_CLASS.map(c=>opt(c,c,OSR.dealType)).join('')+opt('(Unclassified)','Unclassified',OSR.dealType)))}
       ${fld('Priority Tier', sel('tier', opt('all','All tiers',OSR.tier)+OPP_TIERS.map(t=>opt(t,t,OSR.tier)).join('')))}
       ${fld('Progress Stage', sel('stage', opt('all','All stages',OSR.stage)+OSR_PROG_ORDER.map(k=>opt(k,OSR_PROG[k].lbl,OSR.stage)).join('')))}
-      ${fld('Broker', sel('broker',brOpts))}
+      ${fld('Broker'+((OSR.office&&OSR.office!=='all')?(' <span style="text-transform:none;letter-spacing:0;font-weight:600;color:var(--muted)">· '+esc(OSR.office)+' only</span>'):''), sel('broker',brOpts))}
       ${fld('Min Likelihood', sel('minLike', opt('any','Any',OSR.minLike)+[9,8,7,6,5].map(n=>opt(String(n),n+'+',OSR.minLike)).join('')))}
     </div>
     <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px">
