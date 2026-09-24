@@ -3564,7 +3564,7 @@ function pcDetect2(rows){
   let weight=find(h=>h.includes('gross')&&(h.includes('weight')||h.includes('wt')));
   if(weight<0) weight=find(h=>h.includes('weight'));
   if(weight<0) weight=find(h=>h==='wt'||/\bwt\b/.test(h)||h==='mass');
-  const wtUnit=(weight>=0 && /\bkg|kgs|kilogram/.test(hdr[weight]))?'kg':'lbs';
+  const wtUnit=(weight>=0?pcDetectWtUnit(hdr[weight]):'lbs');
   let qty=find(h=>h.includes("q'ty")||h.includes('quantity')||/\bqty\b/.test(h));
   if(qty<0) qty=find(h=>h==='pcs'||/\bpcs\b/.test(h)||h.includes('pieces')||h==='count');
   let desc=find(h=>h.includes('description')||h.includes('nomenclature')||h.includes('item name')||h.includes('material')||h.includes('cargo')||h==='name');
@@ -3587,7 +3587,7 @@ function pcExtract2(rows, det){
     else { L=pcNum(m.L>=0?r[m.L]:null); W=pcNum(m.W>=0?r[m.W]:null); H=pcNum(m.H>=0?r[m.H]:null); }
     if(L==null||W==null||H==null||L<=0||W<=0||H<=0) continue;
     const qty=Math.max(1, parseInt(pcNum(m.qty>=0?r[m.qty]:1)||1)||1);
-    let wt=pcNum(m.weight>=0?r[m.weight]:0)||0; if(det.wtUnit==='kg') wt*=2.20462;
+    let wt=pcWtToLbs(pcNum(m.weight>=0?r[m.weight]:0)||0, det.wtUnit);
     const grp=m.group>=0?String(r[m.group]||'').trim():'';
     const itm=m.desc>=0?String(r[m.desc]||'').trim():'';
     let desc=[grp,itm].filter(Boolean).join(' \u2013 ')||itm||grp||'Item';
@@ -3623,7 +3623,7 @@ function pcDetectAny(rows){
     let weight=find(h=>h.includes('gross')&&(h.includes('weight')||h.includes('wt')));
     if(weight<0) weight=find(h=>h.includes('weight'));
     if(weight<0) weight=find(h=>h==='wt'||/\bwt\b/.test(h)||h==='mass');
-    const wtUnit=(weight>=0 && /\bkg|kgs|kilogram/.test(merged[weight]))?'kg':'lbs';
+    const wtUnit=(weight>=0?pcDetectWtUnit(merged[weight]):'lbs');
     let qty=find(h=>h.includes("q'ty")||h.includes('quantity')||/\bqty\b/.test(h));
     if(qty<0) qty=find(h=>h==='pcs'||/\bpcs\b/.test(h)||h.includes('pieces')||h==='count'||/\bbox\b/.test(h));
     let desc=find(h=>h.includes('packing name')||h.includes('description')||h.includes('nomenclature')||h.includes('item name')||h.includes('material')||h.includes('cargo')||h.includes('name'));
@@ -3658,7 +3658,23 @@ function pcColOptions(sel){
   return opts;
 }
 function pcUnitOptions(sel){ return ['in','ft','mm','cm','m'].map(u=>`<option ${sel===u?'selected':''}>${u}</option>`).join(''); }
-function pcWtUnitOptions(sel){ return ['lbs','kg'].map(u=>`<option ${sel===u?'selected':''}>${u}</option>`).join(''); }
+/* ---- weight units: everything converts to lbs ---- */
+const PC_WT_UNITS = [
+  {k:'lbs',    label:'lbs',            f:1},
+  {k:'kg',     label:'kg',             f:2.20462},
+  {k:'tons',   label:'tons (US)',      f:2000},
+  {k:'mtons',  label:'metric tons',    f:2204.62}
+];
+function pcWtFactor(u){ const h=PC_WT_UNITS.find(x=>x.k===u); return h?h.f:1; }
+function pcWtToLbs(v,u){ return (Number(v)||0) * pcWtFactor(u); }
+function pcDetectWtUnit(h){
+  h=String(h||'').toLowerCase();
+  if(/metric\s*ton|\btonne|\bmt\b/.test(h)) return 'mtons';
+  if(/\bton(s|nage)?\b|\bst\b/.test(h))      return 'tons';
+  if(/\bkgs?\b|kilogram/.test(h))             return 'kg';
+  return 'lbs';
+}
+function pcWtUnitOptions(sel){ return PC_WT_UNITS.map(u=>`<option value="${u.k}" ${sel===u.k?'selected':''}>${u.label}</option>`).join(''); }
 function pcMapSheet(v){ PC_MAP.sheetIdx=parseInt(v)||0; const d=pcDetectAny(PC_MAP.sheets[PC_MAP.sheetIdx].rows);
   if(d){ PC_MAP.headerRow=d.headerRow; PC_MAP.map=Object.assign(pcBlankMap(),d.map); PC_MAP.dimMode=d.dimMode; PC_MAP.dimUnit=d.dimUnit; PC_MAP.wtUnit=d.wtUnit; }
   else { PC_MAP.headerRow=0; PC_MAP.map=pcBlankMap(); } pcRenderMapper(); }
@@ -3707,7 +3723,7 @@ function pcRenderMapper(){
       <div class="field-c"><label>Description / Item</label><select class="mini-input" onchange="pcMapCol('desc',this.value)">${pcColOptions(m.map.desc)}</select></div>
       <div class="field-c"><label>Pkg / ID</label><select class="mini-input" onchange="pcMapCol('pkg',this.value)">${pcColOptions(m.map.pkg)}</select></div>
       <div class="field-c"><label>Quantity (Pcs)</label><select class="mini-input" onchange="pcMapCol('qty',this.value)">${pcColOptions(m.map.qty)}</select></div>
-      <div class="field-c"><label>Weight</label><div style="display:flex;gap:6px"><select class="mini-input" onchange="pcMapCol('weight',this.value)">${pcColOptions(m.map.weight)}</select><select class="mini-input" style="max-width:80px" onchange="pcMapUnit('wt',this.value)">${pcWtUnitOptions(m.wtUnit)}</select></div></div>
+      <div class="field-c"><label>Weight <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— converts to lbs</span></label><div style="display:flex;gap:6px"><select class="mini-input" onchange="pcMapCol('weight',this.value)">${pcColOptions(m.map.weight)}</select><select class="mini-input" style="max-width:120px" onchange="pcMapUnit('wt',this.value)">${pcWtUnitOptions(m.wtUnit)}</select></div></div>
     </div>
     <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px">
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
@@ -4081,7 +4097,7 @@ function pcDetect(rows){
   if(cL<0) return null;
   let cWeight=find(h=>h.includes('gross')&&h.includes('weight'));
   if(cWeight<0) cWeight=find(h=>h.includes('weight'));
-  const wtUnit=(cWeight>=0 && /\bkg|kgs|kilogram/.test(hdr[cWeight]))?'kg':'lbs';
+  const wtUnit=(cWeight>=0?pcDetectWtUnit(hdr[cWeight]):'lbs');
   const cQty=find(h=>h.includes("q'ty")||h.includes('qty')||h.includes('quantity'));
   let cPkg=find(h=>h.includes('pkg')&&h.includes('no')); if(cPkg<0) cPkg=find(h=>h.includes('pkg')); if(cPkg<0) cPkg=0;
   const cDesc=find(h=>h.includes('description'));
@@ -4095,7 +4111,7 @@ function pcExtract(rows, det){
     const L=pcNum(r[det.cL]), W=pcNum(r[det.cW]), H=pcNum(r[det.cH]);
     if(L==null||W==null||H==null||L<=0||W<=0||H<=0) continue;
     const qty=Math.max(1, parseInt(pcNum(r[det.cQty])||1)||1);
-    let wt=pcNum(det.cWeight>=0?r[det.cWeight]:0)||0; if(det.wtUnit==='kg') wt=wt*2.20462;
+    let wt=pcWtToLbs(pcNum(det.cWeight>=0?r[det.cWeight]:0)||0, det.wtUnit);
     const grp=det.cGroup>=0?String(r[det.cGroup]||'').trim():'';
     const itm=det.cDesc>=0?String(r[det.cDesc]||'').trim():'';
     let desc=[grp,itm].filter(Boolean).join(' – ') || itm || grp || 'Item';
